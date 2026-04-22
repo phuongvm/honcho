@@ -25,7 +25,7 @@ export default {
 
     let config;
     try {
-      config = parseConfig(request);
+      config = parseConfig(request, env as Record<string, string>);
     } catch (e) {
       const message =
         e instanceof Error ? e.message : "Invalid request";

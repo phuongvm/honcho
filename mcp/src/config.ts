@@ -12,7 +12,7 @@ export interface HonchoConfig {
  * Parse configuration from request headers.
  * Throws on missing required fields so callers get clear errors.
  */
-export function parseConfig(request: Request): HonchoConfig {
+export function parseConfig(request: Request, env?: Record<string, string>): HonchoConfig {
   const authHeader = request.headers.get("Authorization");
   const trimmedAuthHeader = authHeader?.trim();
   if (!trimmedAuthHeader?.startsWith("Bearer ")) {
@@ -37,7 +37,7 @@ export function parseConfig(request: Request): HonchoConfig {
     apiKey,
     userName,
     assistantName: request.headers.get("X-Honcho-Assistant-Name")?.trim() || "Assistant",
-    baseUrl: "https://api.honcho.dev",
+    baseUrl: request.headers.get("X-Honcho-Base-Url")?.trim() || env?.HONCHO_API_URL || (globalThis as any).process?.env?.HONCHO_API_URL || "https://api.honcho.dev",
     workspaceId: request.headers.get("X-Honcho-Workspace-ID")?.trim() || "default",
   };
 }
