@@ -104,6 +104,12 @@ if settings.LLM.GEMINI_API_KEY:
         api_key=settings.LLM.GEMINI_API_KEY,
     )
 
+if settings.LLM.LMSTUDIO_API_KEY:
+    CLIENTS["lmstudio"] = AsyncOpenAI(
+        api_key=settings.LLM.LMSTUDIO_API_KEY,
+        base_url=settings.LLM.LMSTUDIO_BASE_URL,
+    )
+
 
 def client_for_model_config(
     provider: ModelTransport,
@@ -131,6 +137,9 @@ def client_for_model_config(
         return get_openai_override_client(base_url, api_key)
     if provider == "gemini":
         return get_gemini_override_client(base_url, api_key)
+    if provider == "lmstudio":
+        lms_base = base_url or settings.LLM.LMSTUDIO_BASE_URL
+        return get_openai_override_client(lms_base, api_key)
     assert_never(provider)
 
 
@@ -141,7 +150,7 @@ def backend_for_provider(
     """Wrap a raw provider SDK client in the matching ProviderBackend adapter."""
     if provider == "anthropic":
         return AnthropicBackend(client)
-    if provider == "openai":
+    if provider == "openai" or provider == "lmstudio":
         return OpenAIBackend(client)
     if provider == "gemini":
         return GeminiBackend(client)
