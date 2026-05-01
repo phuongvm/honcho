@@ -8,9 +8,19 @@ export interface HonchoConfig {
   workspaceId: string;
 }
 
+export interface Env {
+  HONCHO_API_URL?: string;
+}
+
 /**
- * Parse configuration from request headers.
+ * Parse configuration from request headers and Worker env bindings.
  * Throws on missing required fields so callers get clear errors.
+ *
+ * The Honcho API URL is read from the `HONCHO_API_URL` env var when set,
+ * allowing operators to run this Worker alongside a self-hosted Honcho
+ * instance (see the "Self-Hosted Honcho" section in README.md). It is
+ * intentionally not exposed as a request header: routing public requests
+ * to an internal URL would be a latency and security regression.
  */
 export function parseConfig(request: Request, env?: Record<string, string>): HonchoConfig {
   const authHeader = request.headers.get("Authorization");

@@ -10,7 +10,7 @@ RUN bun install
 COPY . .
 
 # --- Stage 2: Node Native Runtime ---
-FROM node:20
+FROM node:22
 WORKDIR /app
 
 # Ingest all the raw files (including node_modules) built gracefully by Bun
@@ -21,4 +21,4 @@ ENV CI=true
 
 # Revert boot command to native NPM/Node context to bypass Wrangler's anti-Bun blocker
 # Crucially, we wrap it in a shell to inject the Docker container's environment variable into Wrangler's isolated sandbox
-CMD sh -c "npx wrangler dev src/index.ts --port 8787 --ip 0.0.0.0 --var HONCHO_API_URL:$HONCHO_API_URL"
+CMD ["sh", "-c", "npx wrangler dev src/index.ts --port 8787 --ip 0.0.0.0 --var HONCHO_API_URL:$HONCHO_API_URL"]
