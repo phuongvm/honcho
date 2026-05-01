@@ -22,7 +22,7 @@ if not os.getenv("PYTHON_DOTENV_DISABLED"):
 
 logger = logging.getLogger(__name__)
 
-ModelTransport = Literal["anthropic", "openai", "gemini", "lmstudio"]
+ModelTransport = Literal["anthropic", "openai", "gemini", "lmstudio", "nous"]
 EmbeddingTransport = Literal["openai", "gemini"]
 
 
@@ -649,6 +649,8 @@ class LLMSettings(HonchoSettings):
     GEMINI_API_KEY: str | None = None
     LMSTUDIO_API_KEY: str | None = None
     LMSTUDIO_BASE_URL: str | None = None
+    NOUS_API_KEY: str | None = None
+    NOUS_BASE_URL: str | None = "https://inference-api.nousresearch.com/v1"
 
     # General LLM settings
     DEFAULT_MAX_TOKENS: Annotated[int, Field(default=1000, gt=0, le=100_000)] = 2500
