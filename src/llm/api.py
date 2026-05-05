@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from sentry_sdk.ai.monitoring import ai_track
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from src.config import ConfiguredModelSettings, ModelConfig
+from src.config import ConfiguredModelSettings, ModelConfig, settings
 from src.exceptions import ValidationException
 from src.telemetry.logging import conditional_observe
 from src.telemetry.reasoning_traces import log_reasoning_trace
@@ -134,7 +134,7 @@ async def honcho_llm_call(
 ) -> AsyncIterator[HonchoLLMCallStreamChunk] | StreamingResponseWithMetadata: ...
 
 
-@conditional_observe(name="LLM Call")
+@conditional_observe(name="LLM Call", as_type="generation")
 async def honcho_llm_call(
     *,
     model_config: ModelConfig | ConfiguredModelSettings,
@@ -304,11 +304,24 @@ async def honcho_llm_call(
             stop_seqs if stop_seqs is not None else runtime_model_config.stop_sequences
         )
 
-    # Tool-less path: call once and return.
     if not tools or not tool_executor:
         result: (
             HonchoLLMCallResponse[Any] | AsyncIterator[HonchoLLMCallStreamChunk]
         ) = await decorated()
+        
+        if isinstance(result, HonchoLLMCallResponse) and settings.LANGFUSE_PUBLIC_KEY:
+            try:
+                from langfuse import get_client
+                usage = {}
+                if result.input_tokens is not None:
+                    usage["input"] = result.input_tokens
+                if result.output_tokens is not None:
+                    usage["output"] = result.output_tokens
+                if usage:
+                    get_client().update_current_generation(usage_details=usage)
+            except Exception as exc:
+                logger.debug("Failed to update Langfuse usage: %s", exc)
+
         if trace_name and isinstance(result, HonchoLLMCallResponse):
             log_reasoning_trace(
                 task_type=trace_name,
@@ -347,6 +360,19 @@ async def honcho_llm_call(
         stream_final=stream_final_only,
         iteration_callback=iteration_callback,
     )
+    if isinstance(result, HonchoLLMCallResponse) and settings.LANGFUSE_PUBLIC_KEY:
+        try:
+            from langfuse import get_client
+            usage = {}
+            if result.input_tokens is not None:
+                usage["input"] = result.input_tokens
+            if result.output_tokens is not None:
+                usage["output"] = result.output_tokens
+            if usage:
+                get_client().update_current_generation(usage_details=usage)
+        except Exception as exc:
+            logger.debug("Failed to update Langfuse usage: %s", exc)
+
     if trace_name and isinstance(result, HonchoLLMCallResponse):
         log_reasoning_trace(
             task_type=trace_name,

@@ -193,7 +193,6 @@ def estimate_long_summary_prompt_tokens() -> int:
         return 200
 
 
-@conditional_observe(name="Create Short Summary")
 async def create_short_summary(
     formatted_messages: str,
     input_tokens: int,
@@ -219,10 +218,10 @@ async def create_short_summary(
         model_config=_get_summary_model_config(),
         prompt=prompt,
         max_tokens=settings.SUMMARY.MAX_TOKENS_SHORT,
+        track_name="Create Short Summary",
     )
 
 
-@conditional_observe(name="Create Long Summary")
 async def create_long_summary(
     formatted_messages: str,
     previous_summary: str | None = None,
@@ -244,6 +243,7 @@ async def create_long_summary(
         model_config=_get_summary_model_config(),
         prompt=prompt,
         max_tokens=settings.SUMMARY.MAX_TOKENS_LONG,
+        track_name="Create Long Summary",
     )
 
 
