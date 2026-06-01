@@ -26,4 +26,6 @@ def default_transport_api_key(transport: str) -> str | None:
         return settings.LLM.LMSTUDIO_API_KEY
     if transport == "nous":
         return settings.LLM.NOUS_API_KEY
+    if transport == "ai-router":
+        return settings.LLM.AI_ROUTER_API_KEY
     raise ValidationException(f"Unknown transport: {transport}")

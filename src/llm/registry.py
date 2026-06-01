@@ -120,6 +120,13 @@ if settings.LLM.NOUS_API_KEY:
         timeout=settings.LLM.DEFAULT_TIMEOUT,
     )
 
+if settings.LLM.AI_ROUTER_API_KEY:
+    CLIENTS["ai-router"] = AsyncOpenAI(
+        api_key=settings.LLM.AI_ROUTER_API_KEY,
+        base_url=settings.LLM.AI_ROUTER_BASE_URL,
+        timeout=settings.LLM.DEFAULT_TIMEOUT,
+    )
+
 
 def client_for_model_config(
     provider: ModelTransport,
@@ -153,6 +160,9 @@ def client_for_model_config(
     if provider == "nous":
         nous_base = base_url or settings.LLM.NOUS_BASE_URL
         return get_openai_override_client(nous_base, api_key)
+    if provider == "ai-router":
+        ai_router_base = base_url or settings.LLM.AI_ROUTER_BASE_URL
+        return get_openai_override_client(ai_router_base, api_key)
     assert_never(provider)
 
 
@@ -163,7 +173,7 @@ def backend_for_provider(
     """Wrap a raw provider SDK client in the matching ProviderBackend adapter."""
     if provider == "anthropic":
         return AnthropicBackend(client)
-    if provider == "openai" or provider == "lmstudio":
+    if provider == "openai" or provider == "lmstudio" or provider == "ai-router":
         return OpenAIBackend(client)
     if provider == "nous":
         return OpenAIBackend(client, is_nous=True)
