@@ -5,10 +5,9 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
-from openai import AsyncOpenAI, AuthenticationError
+from openai import AuthenticationError, BadRequestError, LengthFinishReasonError
 from pydantic import BaseModel, ValidationError
 
-from src.config import settings
 from src.exceptions import ValidationException
 from src.llm.backend import CompletionResult, StreamChunk, ToolCallResult
 from src.llm.structured_output import (
@@ -110,9 +109,35 @@ def extract_openai_cache_tokens(usage: Any) -> tuple[int, int]:
 class OpenAIBackend:
     """Provider backend wrapping AsyncOpenAI."""
 
-    def __init__(self, client: Any, is_nous: bool = False) -> None:
+    def __init__(
+        self,
+        client: Any,
+        is_nous: bool = False,
+        nous_auth: Any | None = None,
+    ) -> None:
         self._client: Any = client
         self._is_nous: bool = is_nous
+        self._nous_auth = nous_auth  # NousAuthProvider for proactive key refresh
+
+    async def _ensure_nous_key(self) -> None:
+        """If NousAuthProvider is configured, update client API key proactively."""
+        if self._nous_auth is not None:
+            try:
+                key = await self._nous_auth.get_api_key()
+                self._client.api_key = key
+            except Exception as exc:
+                logger.warning("NousAuthProvider.get_api_key() failed: %s", exc)
+
+    async def _refresh_nous_key_for_retry(self, original: AuthenticationError) -> None:
+        """Refresh a Nous key through NousAuthProvider before a single retry."""
+        if not self._is_nous or self._nous_auth is None:
+            raise original
+        try:
+            key = await self._nous_auth.get_api_key(force_refresh=True)
+        except Exception as exc:
+            logger.warning("NousAuthProvider force refresh failed: %s", exc)
+            raise original from exc
+        self._client.api_key = key
 
     async def _call_with_autorefresh(
         self, *, use_parse: bool, params: dict[str, Any]
@@ -124,20 +149,12 @@ class OpenAIBackend:
             return await self._client.chat.completions.create(**params)
         except AuthenticationError as exc:
             if self._is_nous:
-                logger.warning("Nous API 401 detected — attempting auto-refresh...")
-                from ..nous_refresh import refresh_nous_credentials
-
-                new_key = await refresh_nous_credentials()
-                if new_key:
-                    self._client.api_key = new_key
-                    try:
-                        settings.LLM.NOUS_API_KEY = new_key
-                    except Exception:
-                        pass
-                    logger.info("Retrying request with refreshed API key")
-                    if use_parse:
-                        return await self._client.chat.completions.parse(**params)
-                    return await self._client.chat.completions.create(**params)
+                logger.warning("Nous API 401 detected — forcing auth.json refresh...")
+                await self._refresh_nous_key_for_retry(exc)
+                logger.info("Retrying request with refreshed Nous API key")
+                if use_parse:
+                    return await self._client.chat.completions.parse(**params)
+                return await self._client.chat.completions.create(**params)
             raise
 
     async def complete(
@@ -156,6 +173,9 @@ class OpenAIBackend:
         max_output_tokens: int | None = None,
         extra_params: dict[str, Any] | None = None,
     ) -> CompletionResult:
+        # Proactive Nous credential refresh (before call, not on 401)
+        await self._ensure_nous_key()
+
         if thinking_budget_tokens is not None:
             raise ValidationException(
                 "OpenAI backend does not support thinking_budget_tokens; use thinking_effort instead"
@@ -179,19 +199,10 @@ class OpenAIBackend:
                 response = await self._client.chat.completions.parse(**params)
             except AuthenticationError as exc:
                 if self._is_nous:
-                    logger.warning("Nous API 401 detected — attempting auto-refresh...")
-                    from ..nous_refresh import refresh_nous_credentials
-                    new_key = await refresh_nous_credentials()
-                    if new_key:
-                        self._client.api_key = new_key
-                        try:
-                            settings.LLM.NOUS_API_KEY = new_key
-                        except Exception:
-                            pass
-                        logger.info("Retrying request with refreshed API key")
-                        response = await self._client.chat.completions.parse(**params)
-                    else:
-                        raise
+                    logger.warning("Nous API 401 detected — forcing auth.json refresh...")
+                    await self._refresh_nous_key_for_retry(exc)
+                    logger.info("Retrying request with refreshed Nous API key")
+                    response = await self._client.chat.completions.parse(**params)
                 else:
                     raise
             except LengthFinishReasonError as exc:
@@ -251,19 +262,10 @@ class OpenAIBackend:
             response = await self._client.chat.completions.create(**params)
         except AuthenticationError as exc:
             if self._is_nous:
-                logger.warning("Nous API 401 detected — attempting auto-refresh...")
-                from ..nous_refresh import refresh_nous_credentials
-                new_key = await refresh_nous_credentials()
-                if new_key:
-                    self._client.api_key = new_key
-                    try:
-                        settings.LLM.NOUS_API_KEY = new_key
-                    except Exception:
-                        pass
-                    logger.info("Retrying request with refreshed API key")
-                    response = await self._client.chat.completions.create(**params)
-                else:
-                    raise
+                logger.warning("Nous API 401 detected — forcing auth.json refresh...")
+                await self._refresh_nous_key_for_retry(exc)
+                logger.info("Retrying request with refreshed Nous API key")
+                response = await self._client.chat.completions.create(**params)
             else:
                 raise
         return self._normalize_response(response)
@@ -284,6 +286,9 @@ class OpenAIBackend:
         max_output_tokens: int | None = None,
         extra_params: dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamChunk]:
+        # Proactive Nous credential refresh (before call, not on 401)
+        await self._ensure_nous_key()
+
         if thinking_budget_tokens is not None:
             raise ValidationException(
                 "OpenAI backend does not support thinking_budget_tokens; use thinking_effort instead"
@@ -321,19 +326,10 @@ class OpenAIBackend:
             response_stream = await self._client.chat.completions.create(**params)
         except AuthenticationError as exc:
             if self._is_nous:
-                logger.warning("Nous API 401 detected — attempting auto-refresh...")
-                from ..nous_refresh import refresh_nous_credentials
-                new_key = await refresh_nous_credentials()
-                if new_key:
-                    self._client.api_key = new_key
-                    try:
-                        settings.LLM.NOUS_API_KEY = new_key
-                    except Exception:
-                        pass
-                    logger.info("Retrying request with refreshed API key")
-                    response_stream = await self._client.chat.completions.create(**params)
-                else:
-                    raise
+                logger.warning("Nous API 401 detected — forcing auth.json refresh...")
+                await self._refresh_nous_key_for_retry(exc)
+                logger.info("Retrying request with refreshed Nous API key")
+                response_stream = await self._client.chat.completions.create(**params)
             else:
                 raise
         finish_reason: str | None = None

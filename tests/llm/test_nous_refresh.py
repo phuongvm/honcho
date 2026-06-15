@@ -1,21 +1,18 @@
 """Tests for nous_refresh module — isolated via httpx mocking."""
 
-import json
-import os
+import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 from src.llm.nous_refresh import (
-    STATE_FILE,
     load_state,
+    refresh_nous_credentials,
     save_state,
     update_env_key,
-    refresh_nous_credentials,
-    _find_project_root,
 )
-
 
 # ── State management ─────────────────────────────────────────────────────────
 
@@ -44,13 +41,11 @@ def test_save_and_load_state(tmp_path: Path) -> None:
 
 # ── .env update ──────────────────────────────────────────────────────────────
 
-def test_update_env_key_creates_file_if_missing(tmp_path: Path) -> None:
-    """update_env_key creates .env when missing."""
+def test_update_env_key_skips_missing_file(tmp_path: Path) -> None:
+    """update_env_key leaves missing .env files untouched."""
     env_path = tmp_path / ".env"
     update_env_key(env_path, "newkey_xyz")
-    assert env_path.exists()
-    content = env_path.read_text()
-    assert "LLM_NOUS_API_KEY=newkey_xyz" in content
+    assert not env_path.exists()
 
 
 def test_update_env_key_replaces_existing(tmp_path: Path) -> None:
@@ -81,7 +76,6 @@ def test_find_project_root_with_dotenv(tmp_path: Path) -> None:
     # Simulate file deep in subdir
     deep = tmp_path / "sub" / "deep"
     deep.mkdir(parents=True)
-    fake_file = deep / "dummy.py"
     with patch("src.llm.nous_refresh.Path", side_effect=lambda x: tmp_path / x if x == "__file__" else Path(x)):
         # simpler: patch Path(__file__).resolve to return deep file
         pass  # This is complex; test at integration level may be better.
@@ -130,10 +124,13 @@ async def test_refresh_nous_credentials_success(
     original_save = refresh_mod.save_state
     original_update_env = refresh_mod.update_env_key
     original_find_root = refresh_mod._find_project_root
+    original_load_state = refresh_mod.load_state
 
+    refresh_mod.load_state = lambda: {"refresh_token": "old_refresh_token"}
     refresh_mod.save_state = fake_save_state
     refresh_mod.update_env_key = lambda p, k: None  # we'll call directly
     refresh_mod._find_project_root = lambda: tmp_path
+    monkeypatch.setattr(refresh_mod.httpx, "AsyncClient", lambda timeout: mock_client)
 
     # Also patch settings import
     fake_settings = SimpleNamespace(LLM=SimpleNamespace(NOUS_API_KEY="oldkey"))
@@ -146,13 +143,8 @@ async def test_refresh_nous_credentials_success(
         refresh_mod.save_state = original_save
         refresh_mod.update_env_key = original_update_env
         refresh_mod._find_project_root = original_find_root
+        refresh_mod.load_state = original_load_state
 
     assert result == "new_agent_key_123"
     assert saved_state["refresh_token"] == "new_refresh_token"
     assert saved_state["agent_key"] == "new_agent_key_123"
-
-
-# Helper for SimpleNamespace
-from types import SimpleNamespace
-from unittest.mock import Mock
-import sys

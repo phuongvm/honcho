@@ -8,6 +8,7 @@ history adapter selection) lives here now.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from typing import assert_never
 
@@ -30,7 +31,19 @@ from .history_adapters import (
     HistoryAdapter,
     OpenAIHistoryAdapter,
 )
+from .nous_auth import NousAuthProvider
 from .types import ProviderClient
+
+# ── Nous shared credential store ──────────────────────────────────────────
+# When NOUS_AUTH_JSON_PATH is set, NousAuthProvider reads from mounted
+# Hermes auth.json and proactively refreshes expired JWTs.
+_nous_auth_path = os.getenv("NOUS_AUTH_JSON_PATH")
+_nous_auth: NousAuthProvider | None = (
+    NousAuthProvider(_nous_auth_path, fallback_api_key=settings.LLM.NOUS_API_KEY)
+    if _nous_auth_path
+    else None
+)
+NOUS_AUTH_PROVIDER_PLACEHOLDER_KEY = "nous-auth-provider-placeholder"
 
 
 @lru_cache(maxsize=1)
@@ -145,6 +158,8 @@ def client_for_model_config(
 
     api_key = model_config.api_key or default_transport_api_key(provider)
     base_url = model_config.base_url
+    if provider == "nous" and not api_key and _nous_auth is not None:
+        api_key = NOUS_AUTH_PROVIDER_PLACEHOLDER_KEY
     if not api_key:
         raise ValidationException(f"Missing API key for {provider} model config")
 
@@ -176,7 +191,7 @@ def backend_for_provider(
     if provider == "openai" or provider == "lmstudio" or provider == "ai-router":
         return OpenAIBackend(client)
     if provider == "nous":
-        return OpenAIBackend(client, is_nous=True)
+        return OpenAIBackend(client, is_nous=True, nous_auth=_nous_auth)
     if provider == "gemini":
         return GeminiBackend(client)
     assert_never(provider)

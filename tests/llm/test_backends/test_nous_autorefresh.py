@@ -1,16 +1,31 @@
 """Integration tests for Nous auto-refresh in OpenAIBackend."""
 
+import base64
+import json
+import time
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from openai import AuthenticationError
 
 from src.llm.backends.openai import OpenAIBackend
+from src.llm.nous_auth import NousAuthProvider
+
+
+def make_jwt(*, ttl: int = 900, scope: str = "inference:invoke") -> str:
+    header = {"alg": "none", "typ": "JWT"}
+    payload = {"exp": int(time.time()) + ttl, "scope": scope}
+
+    def encode(part: dict[str, object]) -> str:
+        raw = json.dumps(part, separators=(",", ":")).encode()
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    return f"{encode(header)}.{encode(payload)}."
 
 
 @pytest.mark.asyncio
 async def test_nous_backend_auto_refresh_on_401() -> None:
-    """OpenAIBackend with is_nous=True should refresh credentials on 401 and retry."""
+    """OpenAIBackend should use NousAuthProvider on 401 and retry once."""
     # Arrange
     mock_client = Mock()
     mock_client.api_key = "old_key"
@@ -40,12 +55,15 @@ async def test_nous_backend_auto_refresh_on_401() -> None:
     ]
     )
 
-    backend = OpenAIBackend(mock_client, is_nous=True)
+    provider = Mock()
+    provider.get_api_key = AsyncMock(side_effect=["old_key", "new_refreshed_key"])
 
-    # Patch refresh_nous_credentials to return a fake new key
+    backend = OpenAIBackend(mock_client, is_nous=True, nous_auth=provider)
+
+    # The retired legacy refresh module must not be used.
     with patch(
         "src.llm.nous_refresh.refresh_nous_credentials",
-        new=AsyncMock(return_value="new_refreshed_key"),
+        new=AsyncMock(side_effect=AssertionError("legacy refresh called")),
     ):
         result = await backend.complete(
             model="nous-model",
@@ -88,7 +106,7 @@ async def test_openai_backend_no_refresh_on_401() -> None:
 
 @pytest.mark.asyncio
 async def test_nous_backend_refresh_fails_propagates_error() -> None:
-    """If refresh_nous_credentials returns None, original 401 is raised."""
+    """If NousAuthProvider cannot refresh on 401, the original 401 is raised."""
     mock_client = Mock()
     mock_client.api_key = "old_key"
     mock_client.chat.completions.create = AsyncMock(
@@ -99,18 +117,22 @@ async def test_nous_backend_refresh_fails_propagates_error() -> None:
     )
     )
 
-    backend = OpenAIBackend(mock_client, is_nous=True)
+    provider = Mock()
+    provider.get_api_key = AsyncMock(side_effect=RuntimeError("refresh failed"))
+    backend = OpenAIBackend(mock_client, is_nous=True, nous_auth=provider)
 
-    with patch(
-        "src.llm.nous_refresh.refresh_nous_credentials",
-        new=AsyncMock(return_value=None),  # refresh fails
+    with (
+        patch(
+            "src.llm.nous_refresh.refresh_nous_credentials",
+            new=AsyncMock(side_effect=AssertionError("legacy refresh called")),
+        ),
+        pytest.raises(AuthenticationError),
     ):
-        with pytest.raises(AuthenticationError):
-            await backend.complete(
-                model="nous-model",
-                messages=[{"role": "user", "content": "test"}],
-                max_tokens=5,
-            )
+        await backend.complete(
+            model="nous-model",
+            messages=[{"role": "user", "content": "test"}],
+            max_tokens=5,
+        )
 
     # Still only one call because refresh failed before retry
     assert mock_client.chat.completions.create.call_count == 1
@@ -118,7 +140,7 @@ async def test_nous_backend_refresh_fails_propagates_error() -> None:
 
 @pytest.mark.asyncio
 async def test_nous_backend_stream_auto_refresh() -> None:
-    """Stream path also triggers auto-refresh on 401."""
+    """Stream path also refreshes through NousAuthProvider on 401."""
 
     class FakeAsyncIterator:
         """Simple async iterator yielding predetermined chunks."""
@@ -157,11 +179,13 @@ async def test_nous_backend_stream_auto_refresh() -> None:
 
     mock_client.chat.completions.create = AsyncMock(side_effect=create_side_effect)
 
-    backend = OpenAIBackend(mock_client, is_nous=True)
+    provider = Mock()
+    provider.get_api_key = AsyncMock(side_effect=["old_key", "new_key"])
+    backend = OpenAIBackend(mock_client, is_nous=True, nous_auth=provider)
 
     with patch(
         "src.llm.nous_refresh.refresh_nous_credentials",
-        new=AsyncMock(return_value="new_key"),
+        new=AsyncMock(side_effect=AssertionError("legacy refresh called")),
     ):
         chunks = []
         async for chunk in backend.stream(
@@ -178,3 +202,71 @@ async def test_nous_backend_stream_auto_refresh() -> None:
     assert chunks[0].content == "Hello"
     assert chunks[1].is_done is True
     assert chunks[1].output_tokens == 1
+
+
+@pytest.mark.asyncio
+async def test_nous_auth_provider_falls_back_to_env_when_auth_file_missing(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing shared auth.json should use LLM_NOUS_API_KEY instead of failing."""
+    monkeypatch.setenv("LLM_NOUS_API_KEY", "static-fallback-key")
+
+    provider = NousAuthProvider(tmp_path / "missing-auth.json")
+
+    assert await provider.get_api_key() == "static-fallback-key"
+
+
+@pytest.mark.asyncio
+async def test_nous_auth_provider_reads_flat_shared_access_token(tmp_path) -> None:
+    """Hermes shared/nous_auth.json uses a flat root access_token layout."""
+    token = make_jwt(ttl=900)
+    auth_path = tmp_path / "nous_auth.json"
+    auth_path.write_text(
+        json.dumps(
+            {
+                "_schema": "hermes.nous_auth.v1",
+                "access_token": token,
+                "refresh_token": "rt_flat",
+                "expires_at": "2099-01-01T00:00:00+00:00",
+            }
+        )
+    )
+
+    provider = NousAuthProvider(auth_path)
+
+    assert await provider.get_api_key() == token
+
+
+@pytest.mark.asyncio
+async def test_nous_auth_provider_refresh_preserves_flat_shared_layout(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refreshing flat shared credentials should not rewrite into providers.nous."""
+    expired = make_jwt(ttl=-10)
+    refreshed = make_jwt(ttl=900)
+    auth_path = tmp_path / "nous_auth.json"
+    auth_path.write_text(
+        json.dumps(
+            {
+                "_schema": "hermes.nous_auth.v1",
+                "access_token": expired,
+                "refresh_token": "rt_old",
+                "client_id": "hermes-cli",
+            }
+        )
+    )
+
+    monkeypatch.setattr(
+        "src.llm.nous_auth._refresh_access_token",
+        lambda refresh_token: (refreshed, "rt_new"),
+    )
+
+    provider = NousAuthProvider(auth_path)
+
+    assert await provider.get_api_key() == refreshed
+
+    written = json.loads(auth_path.read_text())
+    assert "providers" not in written
+    assert written["access_token"] == refreshed
+    assert written["agent_key"] == refreshed
+    assert written["refresh_token"] == "rt_new"
