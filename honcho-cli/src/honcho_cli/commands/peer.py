@@ -212,7 +212,7 @@ def create_peer(
             parsed_metadata = json.loads(metadata)
         except json.JSONDecodeError as e:
             print_error("INVALID_JSON", f"--metadata must be valid JSON: {e}", {})
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
     peer_config = PeerConfig(observe_me=observe_me) if observe_me is not None else None
 
@@ -269,7 +269,7 @@ def set_metadata(
         parsed = json.loads(metadata)
     except json.JSONDecodeError as e:
         print_error("INVALID_JSON", f"metadata must be valid JSON: {e}", {})
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     p = client.peer(pid)
 

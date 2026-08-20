@@ -84,7 +84,7 @@ def create_workspace(
             parsed_metadata = json.loads(metadata)
         except json.JSONDecodeError as e:
             print_error("INVALID_JSON", f"--metadata must be valid JSON: {e}", {})
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
     try:
         # Trigger get-or-create via the workspace ensure mechanism

@@ -55,11 +55,7 @@ def list_conclusions(
     p = client.peer(observer)
 
     try:
-        if observed:
-            scope = p.conclusions_of(observed)
-        else:
-            scope = p.conclusions
-
+        scope = p.conclusions_of(observed) if observed else p.conclusions
         conclusions = scope.list(size=limit).items
         items = [
             {
@@ -97,11 +93,7 @@ def search(
     p = client.peer(observer)
 
     try:
-        if observed:
-            scope = p.conclusions_of(observed)
-        else:
-            scope = p.conclusions
-
+        scope = p.conclusions_of(observed) if observed else p.conclusions
         results = scope.query(query, top_k=top_k)
         items = [
             {
@@ -147,11 +139,7 @@ def create(
     p = client.peer(observer)
 
     try:
-        if observed:
-            scope = p.conclusions_of(observed)
-        else:
-            scope = p.conclusions
-
+        scope = p.conclusions_of(observed) if observed else p.conclusions
         params: dict[str, object] = {"content": content}
         if config.session_id:
             params["session_id"] = config.session_id
@@ -210,11 +198,7 @@ def delete(
         typer.confirm(f"Delete conclusion '{conclusion_id}'?", abort=True)
 
     try:
-        if observed:
-            scope = p.conclusions_of(observed)
-        else:
-            scope = p.conclusions
-
+        scope = p.conclusions_of(observed) if observed else p.conclusions
         scope.delete(conclusion_id)
         status(f"Conclusion '{conclusion_id}' deleted")
         print_result({"deleted": conclusion_id})

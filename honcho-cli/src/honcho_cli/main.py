@@ -14,6 +14,13 @@ from rich.console import Console
 from honcho_cli import __version__
 from honcho_cli._help import HonchoTyperGroup, print_welcome
 from honcho_cli.branding import BANNER
+from honcho_cli.commands.conclusion import app as conclusion_app
+from honcho_cli.commands.config_cmd import app as config_app
+from honcho_cli.commands.message import app as message_app
+from honcho_cli.commands.peer import app as peer_app
+from honcho_cli.commands.session import app as session_app
+from honcho_cli.commands.setup import doctor, init
+from honcho_cli.commands.workspace import app as workspace_app
 from honcho_cli.output import set_json_mode
 
 app = typer.Typer(
@@ -62,8 +69,6 @@ def main(
 
 
 # Register top-level commands
-from honcho_cli.commands.setup import doctor, init
-
 app.command()(init)
 app.command()(doctor)
 
@@ -76,13 +81,6 @@ def help_cmd(ctx: typer.Context) -> None:
 
 
 # Register command groups
-from honcho_cli.commands.conclusion import app as conclusion_app
-from honcho_cli.commands.config_cmd import app as config_app
-from honcho_cli.commands.message import app as message_app
-from honcho_cli.commands.peer import app as peer_app
-from honcho_cli.commands.session import app as session_app
-from honcho_cli.commands.workspace import app as workspace_app
-
 app.add_typer(peer_app,       name="peer")
 app.add_typer(session_app,    name="session")
 app.add_typer(message_app,    name="message")
