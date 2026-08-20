@@ -1,3 +1,5 @@
+"""CRUD helpers for workspace records and workspace deletion checks."""
+
 from dataclasses import dataclass
 from logging import getLogger
 from typing import Any
@@ -58,6 +60,7 @@ def workspace_cache_key(workspace_name: str) -> str:
     key=WORKSPACE_CACHE_KEY_TEMPLATE,
     ttl=f"{settings.CACHE.DEFAULT_LOCK_TTL_SECONDS}s",
     prefix=WORKSPACE_LOCK_PREFIX,
+    check_interval=settings.CACHE.LOCK_WAIT_CHECK_INTERVAL_SECONDS,
 )
 async def _fetch_workspace(
     db: AsyncSession, workspace_name: str
@@ -154,17 +157,25 @@ async def get_or_create_workspace(
 
 async def get_all_workspaces(
     filters: dict[str, Any] | None = None,
+    reverse: bool = False,
 ) -> Select[tuple[models.Workspace]]:
     """
     Get all workspaces.
 
     Args:
-        db: Database session
         filters: Filter the workspaces by a dictionary of metadata
+        reverse: Whether to reverse the default creation order
     """
     stmt = select(models.Workspace)
     stmt = apply_filter(stmt, models.Workspace, filters)
-    stmt: Select[tuple[models.Workspace]] = stmt.order_by(models.Workspace.created_at)
+    if reverse:
+        stmt = stmt.order_by(
+            models.Workspace.created_at.desc(), models.Workspace.id.desc()
+        )
+    else:
+        stmt = stmt.order_by(
+            models.Workspace.created_at.asc(), models.Workspace.id.asc()
+        )
     return stmt
 
 

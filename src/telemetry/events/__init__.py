@@ -24,6 +24,11 @@ Event Categories:
     - AgentToolPeerCardUpdatedEvent: Peer card updated by agent
     - AgentToolSummaryCreatedEvent: Summary created
 
+    api: User-facing API operations
+    - MessageCreatedEvent: Message batch created
+    - FileUploadedEvent: File converted into messages
+    - GetContextEvent: Context retrieved for a session or peer
+
     deletion: Resource removal
     - DeletionCompletedEvent: Resource deletion completed (with cascade counts)
 
@@ -55,10 +60,16 @@ import logging
 
 from src.telemetry.events.agent import (
     AgentIterationEvent,
+    AgentToolCallCompletedEvent,
     AgentToolConclusionsCreatedEvent,
     AgentToolConclusionsDeletedEvent,
     AgentToolPeerCardUpdatedEvent,
     AgentToolSummaryCreatedEvent,
+)
+from src.telemetry.events.api import (
+    FileUploadedEvent,
+    GetContextEvent,
+    MessageCreatedEvent,
 )
 from src.telemetry.events.base import BaseEvent, generate_event_id
 from src.telemetry.events.deletion import DeletionCompletedEvent
@@ -67,11 +78,22 @@ from src.telemetry.events.dream import (
     DreamRunEvent,
     DreamSpecialistEvent,
 )
+from src.telemetry.events.llm import (
+    CallPurpose,
+    EmbeddingCallCompletedEvent,
+    EmbeddingCallPurpose,
+    LLMCallCompletedEvent,
+)
 from src.telemetry.events.reconciliation import (
     CleanupStaleItemsCompletedEvent,
     SyncVectorsCompletedEvent,
 )
 from src.telemetry.events.representation import RepresentationCompletedEvent
+from src.telemetry.events.trace import (
+    EmbeddingCallTracedEvent,
+    LLMCallTracedEvent,
+    TraceContentEvent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,10 +111,25 @@ __all__ = [
     "DialecticCompletedEvent",
     # Agent events
     "AgentIterationEvent",
+    "AgentToolCallCompletedEvent",
     "AgentToolConclusionsCreatedEvent",
     "AgentToolConclusionsDeletedEvent",
     "AgentToolPeerCardUpdatedEvent",
     "AgentToolSummaryCreatedEvent",
+    # API events
+    "MessageCreatedEvent",
+    "FileUploadedEvent",
+    "GetContextEvent",
+    # LLM events
+    "LLMCallCompletedEvent",
+    "CallPurpose",
+    "EmbeddingCallCompletedEvent",
+    "EmbeddingCallPurpose",
+    # Trace (full-fidelity payload) events
+    "emit_trace",
+    "EmbeddingCallTracedEvent",
+    "LLMCallTracedEvent",
+    "TraceContentEvent",
     # Reconciliation events
     "SyncVectorsCompletedEvent",
     "CleanupStaleItemsCompletedEvent",
@@ -145,6 +182,27 @@ def emit(event: BaseEvent) -> None:
         )
 
 
+def emit_trace(event: BaseEvent) -> None:
+    """Queue a payload-trace event on the SEPARATE trace emitter.
+
+    Distinct from `emit()` so a trace burst can never evict billing events from
+    the metrics buffer. No-op when payload tracing is off (trace emitter None).
+    Best-effort — swallows failures so telemetry never breaks the LLM path.
+    """
+    try:
+        from src.telemetry.emitter import get_trace_emitter
+
+        emitter = get_trace_emitter()
+        if emitter is None:
+            logger.debug("Trace emitter not initialized, dropping trace event")
+            return
+        emitter.emit(event)
+    except Exception:  # pragma: no cover - best-effort telemetry
+        logger.debug(
+            "Failed to emit trace event %s", type(event).__name__, exc_info=True
+        )
+
+
 async def initialize_telemetry_events() -> None:
     """Initialize the telemetry events system based on configuration.
 
@@ -161,6 +219,17 @@ async def initialize_telemetry_events() -> None:
         logger.info("CloudEvents telemetry disabled")
         return
 
+    # Langfuse as a projection over the captured LLM stream. Gated behind the
+    # telemetry master switch above, so disabling telemetry disables Langfuse
+    # too. Registering the exporter makes has_exporters() true, which is what
+    # turns on CapturedLLMCall building.
+    if settings.langfuse_exporter_enabled:
+        from src.llm.capture import register_exporter
+        from src.telemetry.langfuse_exporter import LangfuseExporter
+
+        register_exporter(LangfuseExporter())
+        logger.info("Langfuse exporter registered (LANGFUSE_EXPORTER_MODE=exporter)")
+
     await initialize_emitter(
         endpoint=settings.TELEMETRY.ENDPOINT,
         headers=settings.TELEMETRY.HEADERS,
@@ -176,6 +245,27 @@ async def initialize_telemetry_events() -> None:
         "CloudEvents telemetry initialized, endpoint: %s", settings.TELEMETRY.ENDPOINT
     )
 
+    # Full-fidelity payload tracing — opt-in, separate emitter + content exporter.
+    if settings.TELEMETRY.TRACE_PAYLOADS_ENABLED:
+        from src.llm.capture import register_exporter
+        from src.telemetry.emitter import initialize_trace_emitter
+        from src.telemetry.trace_exporter import TraceExporter
+
+        await initialize_trace_emitter(
+            endpoint=settings.TELEMETRY.ENDPOINT,
+            headers=settings.TELEMETRY.HEADERS,
+            batch_size=settings.TELEMETRY.BATCH_SIZE,
+            flush_interval_seconds=settings.TELEMETRY.FLUSH_INTERVAL_SECONDS,
+            flush_threshold=settings.TELEMETRY.FLUSH_THRESHOLD,
+            max_retries=settings.TELEMETRY.MAX_RETRIES,
+            max_buffer_size=settings.TELEMETRY.MAX_BUFFER_SIZE,
+            enabled=True,
+        )
+        register_exporter(TraceExporter())
+        logger.info(
+            "Payload tracing initialized, endpoint: %s", settings.TELEMETRY.ENDPOINT
+        )
+
 
 async def shutdown_telemetry_events() -> None:
     """Shutdown the telemetry events system.
@@ -183,7 +273,16 @@ async def shutdown_telemetry_events() -> None:
     This should be called during application shutdown to ensure
     all buffered events are flushed before exit.
     """
-    from src.telemetry.emitter import shutdown_emitter
+    # Tear down the trace path first (flush its buffer, drop exporters + dedup
+    # state) before the primary emitter, so a late capture can't re-register work.
+    from src.llm.capture import clear_exporters
+    from src.telemetry import langfuse_session, trace_session
+    from src.telemetry.emitter import shutdown_emitter, shutdown_trace_emitter
+
+    clear_exporters()
+    await shutdown_trace_emitter()
+    trace_session.reset()
+    langfuse_session.reset()
 
     await shutdown_emitter()
     logger.info("CloudEvents telemetry shutdown complete")

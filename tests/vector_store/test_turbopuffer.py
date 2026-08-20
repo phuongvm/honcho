@@ -53,6 +53,30 @@ async def test_upsert_many_raises_vector_store_error_on_5xx(
     namespace_mock.write.assert_awaited_once()
 
 
+def test_build_filters_membership(store: TurbopufferVectorStore) -> None:
+    """Both the dict `in` form and the bare-list sugar produce an In filter."""
+    assert store._build_filters({"session_name": {"in": ["s1", "s2"]}}) == (  # pyright: ignore[reportPrivateUsage]
+        "session_name",
+        "In",
+        ["s1", "s2"],
+    )
+    assert store._build_filters({"session_name": ["s1", "s2"]}) == (  # pyright: ignore[reportPrivateUsage]
+        "session_name",
+        "In",
+        ["s1", "s2"],
+    )
+
+
+def test_build_filters_empty_membership_fails_closed(
+    store: TurbopufferVectorStore,
+) -> None:
+    """An empty membership list must produce an always-false filter, never an
+    omitted/empty In that could widen scope (fail-open)."""
+    never = ("And", [("session_name", "Eq", ""), ("session_name", "NotEq", "")])
+    assert store._build_filters({"session_name": {"in": []}}) == never  # pyright: ignore[reportPrivateUsage]
+    assert store._build_filters({"session_name": []}) == never  # pyright: ignore[reportPrivateUsage]
+
+
 @pytest.mark.asyncio
 async def test_upsert_many_short_circuits_on_empty(
     store: TurbopufferVectorStore,
@@ -79,3 +103,41 @@ async def test_upsert_many_succeeds_without_raising(
 
     assert result is None
     namespace_mock.write.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_query_passes_requested_include_attributes(
+    store: TurbopufferVectorStore,
+) -> None:
+    namespace_mock = MagicMock()
+    namespace_mock.query = AsyncMock(return_value=MagicMock(rows=[]))
+    store._get_namespace = MagicMock(return_value=namespace_mock)  # pyright: ignore[reportPrivateUsage]
+
+    await store.query(
+        "honcho.msg.test",
+        [0.1, 0.2, 0.3, 0.4],
+        include_attributes=["message_id"],
+    )
+
+    namespace_mock.query.assert_awaited_once()
+    assert namespace_mock.query.await_args.kwargs["include_attributes"] == [
+        "message_id"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_query_can_skip_attributes(
+    store: TurbopufferVectorStore,
+) -> None:
+    namespace_mock = MagicMock()
+    namespace_mock.query = AsyncMock(return_value=MagicMock(rows=[]))
+    store._get_namespace = MagicMock(return_value=namespace_mock)  # pyright: ignore[reportPrivateUsage]
+
+    await store.query(
+        "honcho.doc.test",
+        [0.1, 0.2, 0.3, 0.4],
+        include_attributes=False,
+    )
+
+    namespace_mock.query.assert_awaited_once()
+    assert namespace_mock.query.await_args.kwargs["include_attributes"] is False

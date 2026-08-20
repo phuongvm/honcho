@@ -6,6 +6,7 @@ from functools import cache
 from inspect import cleandoc as c
 from typing import TypedDict
 
+from nanoid import generate as generate_nanoid
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,9 +17,11 @@ from src.crud.session import session_cache_key
 from src.dependencies import tracked_db
 from src.exceptions import ResourceNotFoundException
 from src.llm import HonchoLLMCallResponse, honcho_llm_call
+from src.llm.types import LLMTelemetryContext
 from src.models import Message
 from src.telemetry import prometheus_metrics
 from src.telemetry.events import AgentToolSummaryCreatedEvent, emit
+from src.telemetry.events.llm import CallPurpose
 from src.telemetry.logging import accumulate_metric, conditional_observe
 from src.telemetry.prometheus.metrics import (
     DeriverComponents,
@@ -197,6 +200,8 @@ async def create_short_summary(
     formatted_messages: str,
     input_tokens: int,
     previous_summary: str | None = None,
+    *,
+    workspace_name: str | None = None,
 ) -> HonchoLLMCallResponse[str]:
     # input_tokens indicates how many tokens the message list + previous summary take up
     # we want to optimize short summaries to be smaller than the actual content being summarized
@@ -214,17 +219,30 @@ async def create_short_summary(
         formatted_messages, output_words, previous_summary_text
     )
 
+    # Mint a root span id.
+    # No session_id or run_id for tracing
+    trace_id = generate_nanoid()
     return await honcho_llm_call(
         model_config=_get_summary_model_config(),
         prompt=prompt,
         max_tokens=settings.SUMMARY.MAX_TOKENS_SHORT,
-        track_name="Create Short Summary",
+        track_name="Short Summary",
+        telemetry=LLMTelemetryContext(
+            workspace_name=workspace_name,
+            call_purpose=CallPurpose.SUMMARY_SHORT.value,
+            parent_category="summary",
+            trace_id=trace_id,
+            span_id=trace_id,
+            track_name="Short Summary",
+        ),
     )
 
 
 async def create_long_summary(
     formatted_messages: str,
     previous_summary: str | None = None,
+    *,
+    workspace_name: str | None = None,
 ) -> HonchoLLMCallResponse[str]:
     # the word/token ratio is roughly 4:3 so we multiply by 0.75.
     # LLMs *seem* to respond better to getting asked for a word count but should workshop this.
@@ -239,11 +257,22 @@ async def create_long_summary(
         formatted_messages, output_words, previous_summary_text
     )
 
+    # Mint a root span id.
+    # No session_id or run_id for tracing
+    trace_id = generate_nanoid()
     return await honcho_llm_call(
         model_config=_get_summary_model_config(),
         prompt=prompt,
         max_tokens=settings.SUMMARY.MAX_TOKENS_LONG,
-        track_name="Create Long Summary",
+        track_name="Long Summary",
+        telemetry=LLMTelemetryContext(
+            workspace_name=workspace_name,
+            call_purpose=CallPurpose.SUMMARY_LONG.value,
+            parent_category="summary",
+            trace_id=trace_id,
+            span_id=trace_id,
+            track_name="Long Summary",
+        ),
     )
 
 
@@ -437,16 +466,19 @@ async def _create_and_save_summary(
         last_message_id=last_message_id,
         last_message_content_preview=last_message_content_preview,
         message_count=message_count,
+        workspace_name=workspace_name,
     )
+
+    # Compute scaffold tokens up front (cheap + idempotent) so both the
+    # save-summary path and the telemetry emit below can use it
+    # without basedpyright tripping on a possibly-unbound name.
+    if summary_type == SummaryType.SHORT:
+        prompt_tokens = estimate_short_summary_prompt_tokens()
+    else:
+        prompt_tokens = estimate_long_summary_prompt_tokens()
 
     # Step 3: Save to database with new transaction
     if not is_fallback:
-        # Get base prompt tokens based on summary type
-        if summary_type == SummaryType.SHORT:
-            prompt_tokens = estimate_short_summary_prompt_tokens()
-        else:
-            prompt_tokens = estimate_long_summary_prompt_tokens()
-
         track_deriver_input_tokens(
             task_type=DeriverTaskTypes.SUMMARY,
             components={
@@ -495,14 +527,13 @@ async def _create_and_save_summary(
         "ms",
     )
 
-    # Emit telemetry event (only for non-fallback summaries)
-    # Note: Using AgentToolSummaryCreatedEvent with dummy run_id/iteration since
-    # this is called from the deriver, not from an agentic loop
+    # Emit telemetry event (only for non-fallback summaries).
     if not is_fallback:
+        # `prompt_tokens` is set in the `if not is_fallback` block above for
+        # both SHORT and LONG summary types — we're inside the same branch, so
+        # it's guaranteed bound here.
         emit(
             AgentToolSummaryCreatedEvent(
-                run_id="deriver",  # Placeholder - not from an agentic run
-                iteration=0,  # Placeholder - not from an agentic loop
                 parent_category="deriver",
                 agent_type="summarizer",
                 workspace_name=workspace_name,
@@ -513,6 +544,10 @@ async def _create_and_save_summary(
                 summary_type="short" if summary_type == SummaryType.SHORT else "long",
                 input_tokens=llm_input_tokens,
                 output_tokens=llm_output_tokens,
+                # additive token-breakdown fields
+                previous_summary_tokens=previous_summary_tokens,
+                message_tokens=messages_tokens,
+                prompt_scaffold_tokens=prompt_tokens,
             )
         )
 
@@ -526,6 +561,8 @@ async def _create_summary(
     last_message_id: int,
     last_message_content_preview: str,
     message_count: int,
+    *,
+    workspace_name: str | None = None,
 ) -> tuple[Summary, bool, int, int]:
     """
     Generate a summary of the provided messages using an LLM.
@@ -554,11 +591,16 @@ async def _create_summary(
     try:
         if summary_type == SummaryType.SHORT:
             response = await create_short_summary(
-                formatted_messages, input_tokens, previous_summary_text
+                formatted_messages,
+                input_tokens,
+                previous_summary_text,
+                workspace_name=workspace_name,
             )
         else:
             response = await create_long_summary(
-                formatted_messages, previous_summary_text
+                formatted_messages,
+                previous_summary_text,
+                workspace_name=workspace_name,
             )
 
         summary_text = response.content

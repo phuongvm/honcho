@@ -35,6 +35,7 @@ export interface WorkspaceListParams {
   filters?: Record<string, unknown>
   page?: number
   size?: number
+  reverse?: boolean
 }
 
 // =============================================================================
@@ -64,6 +65,7 @@ export interface PeerListParams {
   filters?: Record<string, unknown>
   page?: number
   size?: number
+  reverse?: boolean
 }
 
 export interface PeerChatParams {
@@ -72,6 +74,7 @@ export interface PeerChatParams {
   session_id?: string
   target?: string
   reasoning_level?: 'minimal' | 'low' | 'medium' | 'high' | 'max'
+  response_format?: Record<string, unknown>
 }
 
 export interface PeerChatResponse {
@@ -130,6 +133,28 @@ export interface SessionCreateParams {
   metadata?: Record<string, unknown>
   configuration?: SessionConfigApi
   peers?: Record<string, SessionPeerConfigParams>
+  scopes?: string[]
+}
+
+export interface ScopeResponse {
+  id: string
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+/**
+ * Per-session backfill job state for a scope.
+ *
+ * `docs_copied` is present only once a backfill completes.
+ */
+export interface ScopeBackfillJob {
+  state: 'pending' | 'completed' | 'failed'
+  updated_at: string
+  docs_copied?: number
+}
+
+export interface ScopeStatusResponse {
+  backfill_status: Record<string, ScopeBackfillJob>
 }
 
 export interface SessionUpdateParams {
@@ -141,6 +166,7 @@ export interface SessionListParams {
   filters?: Record<string, unknown>
   page?: number
   size?: number
+  reverse?: boolean
 }
 
 export interface SessionCloneParams {
@@ -226,6 +252,7 @@ export interface MessageListParams {
   filters?: Record<string, unknown>
   page?: number
   size?: number
+  reverse?: boolean
 }
 
 export interface MessageSearchParams {
@@ -238,12 +265,23 @@ export interface MessageSearchParams {
 // Conclusion Types
 // =============================================================================
 
+/**
+ * Reasoning level of a conclusion. "explicit" conclusions are extracted
+ * directly from messages; the others are derived during dreaming.
+ */
+export type ConclusionLevel =
+  | 'explicit'
+  | 'deductive'
+  | 'inductive'
+  | 'contradiction'
+
 export interface ConclusionResponse {
   id: string
   content: string
   observer_id: string
   observed_id: string
   session_id: string | null
+  level: ConclusionLevel
   created_at: string
 }
 
@@ -262,6 +300,7 @@ export interface ConclusionListParams {
   filters?: Record<string, unknown>
   page?: number
   size?: number
+  reverse?: boolean
 }
 
 export interface ConclusionQueryParams {

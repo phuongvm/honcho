@@ -134,6 +134,7 @@ class VectorStore(ABC):
         top_k: int = 10,
         filters: dict[str, Any] | None = None,
         max_distance: float | None = None,
+        include_attributes: bool | list[str] = True,
     ) -> list[VectorQueryResult]:
         """
         Query for similar vectors.
@@ -144,6 +145,8 @@ class VectorStore(ABC):
             top_k: Maximum number of results to return
             filters: Optional metadata filters
             max_distance: Optional maximum distance threshold (cosine distance)
+            include_attributes: Attributes to return with each result. Use False when
+                callers only need IDs/scores, or a list for selected metadata.
 
         Returns:
             List of VectorQueryResult objects, ordered by similarity (most similar first)
@@ -180,6 +183,17 @@ class VectorStore(ABC):
         """
         ...
 
+    @abstractmethod
+    async def probe_namespace_dim(self, namespace: str) -> int | None:
+        """
+        Return the declared vector dimension of an existing namespace.
+
+        Returns ``None`` if the namespace does not exist yet (lazy-create
+        model: not an error). Raises only when the SDK reports the
+        namespace exists but its schema is unreadable.
+        """
+        ...
+
 
 def _create_store_by_type(store_type: str) -> VectorStore:
     """Create a vector store instance by type name."""
@@ -188,7 +202,16 @@ def _create_store_by_type(store_type: str) -> VectorStore:
 
         return TurbopufferVectorStore()
     elif store_type == "lancedb":
-        from src.vector_store.lancedb import LanceDBVectorStore
+        try:
+            from src.vector_store.lancedb import LanceDBVectorStore
+        except ImportError as exc:
+            raise RuntimeError(
+                "VECTOR_STORE.TYPE is set to 'lancedb', but the 'lancedb' package "
+                + "could not be imported. Install Honcho's 'lancedb' extra "
+                + "(for example, `uv sync --extra lancedb`; unavailable on Intel "
+                + "macOS), or use TYPE 'pgvector' or 'turbopuffer'. "
+                + f"Original import error: {exc}"
+            ) from exc
 
         return LanceDBVectorStore()
     else:

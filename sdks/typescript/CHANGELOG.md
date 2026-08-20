@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [2.3.0] - 2026-08-10
+
+### Added
+
+- `responseFormat` option on `peer.chat()` and `peer.chatStream()`, for constraining a dialectic answer to a schema. Pass a Zod schema to get a parsed, validated result back, or a raw JSON Schema object to get the JSON string as-is. Overloads type the return precisely, so a Zod schema narrows to its inferred type and a plain object narrows to `string`. On `chatStream()`, chunks stay raw text that accumulates to a JSON string — parse it after the stream completes. Requires a Honcho server with the matching API support (Honcho v3.0.12+).
+
+## [2.2.0] - 2026-07-02
+
+### Added
+
+- `ConclusionLevel` type (`explicit`, `deductive`, `inductive`, `contradiction`) and a `level` field on `Conclusion`, exposing the reasoning level the server already tracked but previously stripped from responses.
+- `filters` option on `conclusions.list()` and `conclusions.query()`, passed through to the same dynamic server-side filter logic as the other list endpoints. Filter explicit-only conclusions with `{ filters: { level: 'explicit' } }`, or by any other supported field/operator. Requires a Honcho server with the matching API support (Honcho v3.0.11+).
+
+### Fixed
+
+- Scope-managed filter keys (`observer`, `observed`, `session`) are now rejected with a clear error if passed in `filters`, instead of silently overriding the scope and returning conclusions from a different peer pair. Use `peer.conclusions` / `peer.conclusionsOf(target)` and the dedicated `session` option instead. `session_id` remains a valid filter on `query()`.
+
+## [2.1.2] - 2026-05-21
+
+### Added
+
+- `peers` option on `Honcho.session()` — attach peers to a session at creation time instead of needing a follow-up `session.addPeers()` call. Accepts the same `PeerAddition` shape as `session.addPeers()` (peer ID strings, `Peer` objects, arrays of either, or a record with per-peer `observe_me`/`observe_others` config).
+
+### Changed
+
+- ID validation in `validation.ts` now accepts workspace, peer, and session IDs up to 512 characters (was 100), matching the server-side schema change in Honcho v3.0.7.
+
+### Fixed
+
+- `Honcho.workspaces()` now actually forwards the `reverse` option to the server. The 2.1.0 changelog listed `workspaces()` among the list methods that gained `reverse`, but `client.ts` was missing the field on the params type and request builder, so the option was silently dropped. Honoring `reverse` on the workspace/peer/session list routes also requires a Honcho server with the matching API fix; older servers silently ignore the parameter.
+
 ## [2.1.1] - 2026-04-01
 
 ### Fixed

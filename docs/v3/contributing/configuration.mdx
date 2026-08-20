@@ -60,6 +60,12 @@ You can mix providers freely — for example, use Gemini for the deriver and Cla
 
 For OpenAI-compatible proxies (OpenRouter, vLLM, Ollama, etc.), use `transport = "openai"` and set `MODEL_CONFIG__OVERRIDES__BASE_URL` on each feature to point at your endpoint.
 
+<Note>
+Some OpenAI-compatible providers don't support OpenAI Structured Outputs (`json_schema`). Set `DERIVER_MODEL_CONFIG__STRUCTURED_OUTPUT_MODE=json_object` to request loose JSON mode and inject the schema into the prompt instead.
+
+This setting only applies to the **deriver** on the **`openai`** transport — it is the only feature that uses structured output. The dialectic, summarizer, and dreamer don't request structured output, so the setting has no effect there, and the anthropic/gemini transports reject it.
+</Note>
+
 ### Tiered Model Setup
 
 Once you're past initial setup, you can assign different models per feature for better cost/quality tradeoffs. This example uses OpenRouter with light/medium/heavy tiers:
@@ -183,6 +189,54 @@ Each model config supports an `overrides.provider_params` dict for passing arbit
 [deriver.model_config.overrides.provider_params]
 # These are passed directly to the provider SDK
 verbosity = "low"
+# Per-request timeout in seconds; useful for queued workers that can wait longer
+timeout = 3600.0
+```
+
+Because provider params live on each model config, background workers such as
+the Deriver and Dreamer can use longer request timeouts while synchronous
+chat paths keep tighter defaults.
+
+`timeout` gotchas:
+
+- The value is validated **at config load**: it must coerce to a positive,
+  finite number of seconds (numbers or numeric strings like `"3600"`), or the
+  process refuses to start with an error naming the offending config path.
+  This applies to both the primary model config and its `fallback.overrides`.
+- The unit is always **seconds**, regardless of transport. OpenAI and
+  Anthropic receive it as the SDK's `timeout` kwarg; Gemini has no such
+  kwarg, so Honcho converts it to milliseconds on `http_options.timeout`.
+- When unset, nothing is forwarded and each SDK's default applies — adding
+  this key is opt-in and changes no existing behavior.
+- A too-tight timeout doesn't fail once: the aborted request goes through the
+  normal retry/fallback chain before the caller sees an error, so the
+  observed latency is several multiples of the timeout.
+
+#### Transport passthrough keys
+
+Three keys inside `provider_params` are recognized as request-level escape hatches and forwarded to the underlying transport. Where a transport actually validates and merges one of these keys, its value must be a mapping — a non-mapping value raises a configuration error (see the per-transport behavior below; a key a transport ignores is not validated):
+
+- **`extra_body`** — merged into the request body
+- **`extra_headers`** — extra HTTP headers
+- **`extra_query`** — extra URL query parameters
+
+How each transport forwards them differs:
+
+- **OpenAI and Anthropic** forward all three as identically-named SDK kwargs (`extra_body`, `extra_headers`, `extra_query`).
+- **Gemini** has no SDK kwargs for these. It merges `extra_body` into the `GenerateContentConfig` dict and folds `extra_headers` into `http_options.headers`; `extra_query` is **unsupported and silently ignored**.
+
+The merge is shallow and **operator-wins**: if Honcho and your config both set the same top-level key inside `extra_body`, your value replaces Honcho's. You are responsible for choosing a coherent combination — e.g. unset `thinking_budget_tokens` when supplying an `extra_body.thinking` for Anthropic-via-proxy, since Honcho will not translate between the two shapes.
+
+Because Gemini merges `extra_body` directly into `GenerateContentConfig` (rather than a nested request body), an `extra_body` written for OpenAI/Anthropic generally will not transfer to Gemini unchanged — and a key collision there can overwrite a field Honcho manages (`thinking_config`, `response_schema`, `tools`, …).
+
+```toml
+# Example: route an OpenAI-compatible proxy and tag requests for tracing
+[deriver.model_config.overrides.provider_params.extra_headers]
+X-Proxy-Route = "vertex"
+
+[deriver.model_config.overrides.provider_params.extra_body]
+# Provider-native body fields the standard config doesn't expose
+anthropic_beta = ["context-1m-2025-01-15"]
 ```
 
 ### Changing Transport
@@ -212,14 +266,77 @@ EMBEDDING_MAX_TOKENS_PER_REQUEST=300000
 # Embedding transport/model selection
 EMBEDDING_MODEL_CONFIG__TRANSPORT=openai  # openai, gemini
 EMBEDDING_MODEL_CONFIG__MODEL=text-embedding-3-small
+EMBEDDING_MODEL_CONFIG__MAX_BATCH_SIZE=10  # optional per-request input cap
+EMBEDDING_MODEL_CONFIG__TIMEOUT=90.0       # optional client HTTP timeout (seconds)
 
 # Optional endpoint overrides
 EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL=http://localhost:8000/v1
 EMBEDDING_MODEL_CONFIG__OVERRIDES__API_KEY_ENV=EMBEDDING_CUSTOM_API_KEY
 ```
 
-Current constraint:
-- `EMBEDDING_VECTOR_DIMENSIONS` can be changed for fully migrated external vector stores, but pgvector and dual-write mode still require `1536` until the schema migration lands.
+`EMBEDDING_MODEL_CONFIG__MAX_BATCH_SIZE` defaults to 2048 for OpenAI. For
+Gemini the client applies a conservative default of 100 — Gemini does not
+document a per-request limit. Set it when an OpenAI-compatible embedding
+provider accepts fewer inputs per request, such as DashScope
+`text-embedding-v4` with a limit of 10.
+
+`EMBEDDING_MODEL_CONFIG__TIMEOUT` is an optional client HTTP timeout in
+seconds. OpenAI-compatible transports receive it as the SDK `timeout` kwarg
+(omitted when unset, so the SDK default applies). Gemini converts it to
+milliseconds on `http_options.timeout`, and keeps its existing 10-minute
+default when unset. The value is validated at config load the same way as
+LLM `provider_params.timeout` (positive, finite number of seconds).
+
+Forwarding `dimensions=` to OpenAI-compatible providers is controlled by `EMBEDDING_MODEL_CONFIG__DIMENSIONS_MODE`:
+
+- `auto` (default): forwards `dimensions=` when **the operator has explicitly set `EMBEDDING_VECTOR_DIMENSIONS`** — provenance, not value — and the configured model is not on the known-rejecting list (currently `text-embedding-ada-002`). Explicit `EMBEDDING_VECTOR_DIMENSIONS=1536` *does* trigger the forward; this is how `text-embedding-3-large` truncation to 1536 is expressed. Deployments that leave the setting unset get their existing behavior (`dimensions=` is not forwarded).
+- `always`: always forward, regardless of whether `EMBEDDING_VECTOR_DIMENSIONS` was set. Use for OpenAI-compatible self-hosted providers that require it. Do not pick `always` *just* for same-as-default truncation — `auto` handles that case correctly as long as you set `EMBEDDING_VECTOR_DIMENSIONS=1536` explicitly in your environment. `always` is the right answer when your config layer might strip explicit "default-valued" envs, or when you want defense-in-depth.
+- `never`: never forward. Explicit opt-out for providers that reject the parameter (e.g. `text-embedding-ada-002` if it slips past the known-rejecting allowlist).
+
+The embedding wire format is controlled by `EMBEDDING_MODEL_CONFIG__ENCODING_FORMAT_MODE`. The `openai` SDK sends `encoding_format=base64` when the caller passes nothing, and some OpenAI-compatible providers answer that with an error or with empty data, so Honcho always sends the format explicitly:
+
+- `auto` (default): `base64` when no `EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL` is set or it points at `api.openai.com`, `float` otherwise. base64 is roughly 3.6x smaller on the wire than JSON floats, so this keeps the compact format for real OpenAI and only pays the larger payload where compatibility requires it.
+- `float`: always request floats. Use for a provider that rejects base64 but sits behind a host `auto` reads as OpenAI-compatible-but-capable.
+- `base64`: always request base64. Use for a proxy that fronts real OpenAI (Azure OpenAI, LiteLLM) where `auto` cannot tell from the host that base64 is safe, and you want the smaller payload.
+
+Both formats decode to identical vectors, so switching modes does not require re-embedding.
+
+#### Bootstrapping non-default dimensions
+
+`EMBEDDING_VECTOR_DIMENSIONS` is treated as immutable for the life of a deployment. The pgvector schema is dim-pinned by Alembic at `1536` by default; if you want a different dim, you must ALTER the empty columns once at bootstrap time.
+
+Install order for a non-default dim:
+
+```bash
+# 1. Apply migrations (creates default vector(1536) schema)
+alembic upgrade head
+
+# 2. Set the dim you want
+export EMBEDDING_VECTOR_DIMENSIONS=768
+
+# 3. ALTER the empty columns to the target dim
+uv run python scripts/configure_embeddings.py --dry-run   # preview
+uv run python scripts/configure_embeddings.py --yes       # apply
+
+# 4. Start API and deriver — both run the startup validator and refuse
+# to serve traffic if the schema and EMBEDDING_VECTOR_DIMENSIONS disagree.
+```
+
+Existing deployments at 1536 with `text-embedding-3-small` need no action — step 3 detects matching dims and skips.
+
+The script refuses to ALTER tables that already contain non-null embeddings. To switch dim or model on a populated deployment, stand up a new deployment at the new configuration and migrate data out of band; there is no in-place re-embedding affordance. See [Changing Embeddings](./changing-embeddings) for the destroy + rebuild recipe and the same-dim model-swap caveat.
+
+External vector stores (Turbopuffer, LanceDB) do not need bootstrap setup. Namespaces are per-workspace and lazy-created on first write at whatever dim the embedding client returns. Use `--report` to inventory the existing namespaces against the configured dim:
+
+```bash
+uv run python scripts/configure_embeddings.py --report
+```
+
+The startup validator at `src/startup/embedding_validator.py` enforces the dim invariant at boot for both the API (`src/main.py` lifespan) and the deriver (`src/deriver/__main__.py`). A mismatch crashes the process with an actionable error before any HTTP route is served or any queue task is processed.
+
+`VECTOR_STORE_DIMENSIONS` is **deprecated**. `EMBEDDING_VECTOR_DIMENSIONS` is the single source of truth; setting `VECTOR_STORE_DIMENSIONS` explicitly emits a startup warning and is otherwise ignored. The field will be removed in a future release; drop it from your `.env` to silence the warning.
+
+The `VECTOR_STORE_MIGRATED` flag still exists and still controls dual-write / cutover semantics for legacy tenants moving between storage backends (pgvector ↔ turbopuffer ↔ lancedb). It is unrelated to dimension configuration after this release.
 
 ### Feature-Specific Model Configuration
 
@@ -301,10 +418,12 @@ DERIVER_ENABLED=true
 # LLM settings
 DERIVER_MODEL_CONFIG__TRANSPORT=openai
 DERIVER_MODEL_CONFIG__MODEL=gpt-5.4-mini
-DERIVER_MAX_INPUT_TOKENS=23000
+DERIVER_MAX_INPUT_TOKENS=25000
+DERIVER_MAX_CUSTOM_INSTRUCTIONS_TOKENS=2000
 # DERIVER_MODEL_CONFIG__THINKING_EFFORT=minimal
 # DERIVER_MODEL_CONFIG__THINKING_BUDGET_TOKENS=1024
 # DERIVER_MODEL_CONFIG__TEMPERATURE=0.7  # Optional temperature override
+# DERIVER_MODEL_CONFIG__STRUCTURED_OUTPUT_MODE=json_object  # for providers without json_schema support
 
 # Backup model (optional)
 # DERIVER_MODEL_CONFIG__FALLBACK__MODEL=claude-haiku-4-5
@@ -313,6 +432,17 @@ DERIVER_MAX_INPUT_TOKENS=23000
 # Worker settings
 DERIVER_WORKERS=1  # Increase for higher throughput
 DERIVER_POLLING_SLEEP_INTERVAL_SECONDS=1.0
+# Adaptive polling: when idle/erroring, the sleep interval grows from the base
+# toward DERIVER_POLLING_SLEEP_MAX_INTERVAL_SECONDS by the multiplier each cycle,
+# then snaps back to base when work is found. Cuts steady-state query load.
+DERIVER_POLLING_BACKOFF_ENABLED=true
+DERIVER_POLLING_SLEEP_MAX_INTERVAL_SECONDS=30.0
+DERIVER_POLLING_BACKOFF_MULTIPLIER=2.0
+# Jitter so instances that start together don't poll in lockstep. Startup: sleep
+# a random delay in [0, value] before the first poll (0.0 disables). Per-cycle:
+# multiply every poll sleep by a random factor in [1-ratio, 1+ratio] (0.0 disables).
+DERIVER_POLLING_STARTUP_JITTER_SECONDS=30.0
+DERIVER_POLLING_JITTER_RATIO=0.5
 DERIVER_STALE_SESSION_TIMEOUT_MINUTES=5
 
 # Queue management
@@ -322,7 +452,9 @@ DERIVER_QUEUE_ERROR_RETENTION_SECONDS=2592000  # 30 days
 DERIVER_DEDUPLICATE=true
 DERIVER_LOG_OBSERVATIONS=false
 DERIVER_WORKING_REPRESENTATION_MAX_OBSERVATIONS=100
-DERIVER_REPRESENTATION_BATCH_MAX_TOKENS=1024
+DERIVER_REPRESENTATION_BATCH_WORK_UNIT_TARGET_TOKENS=512
+DERIVER_REPRESENTATION_BATCH_TARGET_INPUT_TOKENS=1024
+DERIVER_REPRESENTATION_BATCH_MAX_AGE_SECONDS=1800
 ```
 
 **Peer Card:**
@@ -418,10 +550,13 @@ DB_SCHEMA=public
 DB_POOL_PRE_PING=true
 DB_POOL_SIZE=10
 DB_MAX_OVERFLOW=20
-DB_POOL_TIMEOUT=30
+DB_POOL_TIMEOUT=5
 DB_POOL_RECYCLE=300
 DB_POOL_USE_LIFO=true
 DB_SQL_DEBUG=false
+# Per-connection establish timeout (seconds) so a single connection attempt
+# fails fast instead of hanging when the server/pooler is unreachable.
+DB_CONNECT_TIMEOUT_SECONDS=2
 ```
 
 ### Authentication
@@ -458,7 +593,8 @@ WEBHOOK_MAX_WORKSPACE_LIMIT=10
 VECTOR_STORE_TYPE=pgvector  # Options: pgvector, turbopuffer, lancedb
 VECTOR_STORE_MIGRATED=false
 VECTOR_STORE_NAMESPACE=honcho
-VECTOR_STORE_DIMENSIONS=1536
+# Embedding dim is configured via EMBEDDING_VECTOR_DIMENSIONS — see the
+# Embedding Configuration section. VECTOR_STORE_DIMENSIONS is deprecated.
 
 # Turbopuffer-specific
 VECTOR_STORE_TURBOPUFFER_API_KEY=your-turbopuffer-api-key
@@ -467,6 +603,8 @@ VECTOR_STORE_TURBOPUFFER_REGION=us-east-1
 # LanceDB-specific
 VECTOR_STORE_LANCEDB_PATH=./lancedb_data
 ```
+
+LanceDB is an optional extra and is not included in the default Docker image. Build with `docker build --build-arg INSTALL_LANCEDB=true .` (or `INSTALL_LANCEDB=true docker compose up -d --build`), or run `uv sync --extra lancedb` for manual setups. Note the extra is unavailable on Intel macOS.
 
 ## Monitoring
 
@@ -636,4 +774,4 @@ uv run alembic revision --autogenerate -m "Description"  # Create new migration
 
 5. **Dialectic level issues** — Unset level fields inherit from the built-in defaults. For Anthropic, `THINKING_BUDGET_TOKENS` must be >= 1024 when enabled. For providers without budgeted thinking, omit it or set it to `0`. `MAX_OUTPUT_TOKENS` must exceed `THINKING_BUDGET_TOKENS`.
 
-6. **Vector store issues** — For Turbopuffer, set the API key. Check `VECTOR_STORE_DIMENSIONS` matches your embedding model.
+6. **Vector store issues** — For Turbopuffer, set the API key. Check that `EMBEDDING_VECTOR_DIMENSIONS` matches your embedding model — the startup validator will refuse to boot on a mismatch.

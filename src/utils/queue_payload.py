@@ -57,6 +57,40 @@ class DreamPayload(BasePayload):
     observer: str
     observed: str
     session_name: str | None = None
+    # scheduling context captured at schedule time so the
+    # eventual DreamRunEvent can attribute the cycle back to *why* it was
+    # scheduled (which threshold tripped) and *what* governed when it fired
+    # (idle delay vs. immediate vs. min-hours gate). Defaults preserve
+    # backward compat for any in-flight payloads from older producers.
+    trigger_reason: str | None = None
+    delay_reason: str | None = None
+    documents_since_last_dream_at_schedule: int | None = None
+    document_threshold: int | None = None
+    # card_refresh only: when True the existing peer card is NOT injected into
+    # the specialist prompt and the card is rebuilt solely from observations
+    # currently in the collection (used after removals, where the old card may
+    # contain facts whose support was deleted).
+    rebuild: bool = False
+
+
+class ScopeBackfillPayload(BasePayload):
+    """Payload for scope backfill tasks (session added to a scope, DEV-1999).
+
+    workspace_name lives in the QueueItem's dedicated column, mirroring the
+    other task payloads.
+    """
+
+    task_type: Literal["scope_backfill"] = "scope_backfill"
+    scope_peer: str
+    session_name: str
+
+
+class ScopeRemovalPayload(BasePayload):
+    """Payload for scope removal reconciliation tasks (session removed from a scope)."""
+
+    task_type: Literal["scope_removal"] = "scope_removal"
+    scope_peer: str
+    session_name: str
 
 
 class DeletionPayload(BasePayload):
@@ -90,6 +124,11 @@ def create_dream_payload(
     observer: str,
     observed: str,
     session_name: str | None = None,
+    trigger_reason: str | None = None,
+    delay_reason: str | None = None,
+    documents_since_last_dream_at_schedule: int | None = None,
+    document_threshold: int | None = None,
+    rebuild: bool = False,
 ) -> dict[str, Any]:
     """Create a dream payload."""
     return DreamPayload(
@@ -97,6 +136,27 @@ def create_dream_payload(
         observer=observer,
         observed=observed,
         session_name=session_name,
+        trigger_reason=trigger_reason,
+        delay_reason=delay_reason,
+        documents_since_last_dream_at_schedule=documents_since_last_dream_at_schedule,
+        document_threshold=document_threshold,
+        rebuild=rebuild,
+    ).model_dump(mode="json", exclude_none=True)
+
+
+def create_scope_task_payload(
+    task_type: Literal["scope_backfill", "scope_removal"],
+    *,
+    scope_peer: str,
+    session_name: str,
+) -> dict[str, Any]:
+    """Create a scope backfill / removal payload."""
+    if task_type == "scope_backfill":
+        return ScopeBackfillPayload(
+            scope_peer=scope_peer, session_name=session_name
+        ).model_dump(mode="json", exclude_none=True)
+    return ScopeRemovalPayload(
+        scope_peer=scope_peer, session_name=session_name
     ).model_dump(mode="json", exclude_none=True)
 
 

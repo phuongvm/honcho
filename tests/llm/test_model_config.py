@@ -1,5 +1,4 @@
 import os
-import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -41,6 +40,62 @@ def test_fallback_config_is_independent() -> None:
     assert config.fallback.transport == "openai"
     assert config.fallback.thinking_budget_tokens is None
     assert config.fallback.base_url == "https://example.com/v1"
+
+
+def test_select_model_config_for_attempt_preserves_structured_output_mode() -> None:
+    """The per-attempt fallback config must carry structured_output_mode.
+
+    The operator sets it on the (independent) fallback; dropping it on the final
+    attempt would silently send json_schema to a provider that can't parse it.
+    """
+    from src.config import ResolvedFallbackConfig
+    from src.llm.runtime import select_model_config_for_attempt
+
+    config = ModelConfig(
+        model="gpt-5.4-mini",
+        transport="openai",
+        fallback=ResolvedFallbackConfig(
+            model="glm-4.6",
+            transport="openai",
+            structured_output_mode="json_object",
+        ),
+    )
+
+    # Final attempt swaps to the fallback.
+    selected = select_model_config_for_attempt(config, attempt=3, retry_attempts=3)
+
+    assert selected.model == "glm-4.6"
+    assert selected.structured_output_mode == "json_object"
+
+
+def test_structured_output_mode_rejected_on_non_openai_transport() -> None:
+    """structured_output_mode is a no-op off the openai transport — reject it."""
+    with pytest.raises(ValueError, match="structured_output_mode is only supported"):
+        ConfiguredModelSettings(
+            model="claude-haiku-4-5",
+            transport="anthropic",
+            structured_output_mode="json_object",
+        )
+
+
+def test_structured_output_mode_rejected_on_non_openai_fallback() -> None:
+    from src.config import FallbackModelSettings
+
+    with pytest.raises(ValueError, match="structured_output_mode is only supported"):
+        FallbackModelSettings(
+            model="gemini-2.5-pro",
+            transport="gemini",
+            structured_output_mode="json_object",
+        )
+
+
+def test_structured_output_mode_allowed_on_openai_transport() -> None:
+    config = ConfiguredModelSettings(
+        model="glm-4.6",
+        transport="openai",
+        structured_output_mode="json_object",
+    )
+    assert config.structured_output_mode == "json_object"
 
 
 def test_base_url_is_allowed_for_any_transport() -> None:
@@ -252,14 +307,14 @@ def test_app_settings_propagate_embedding_dimensions_to_vector_store() -> None:
     assert settings.VECTOR_STORE.DIMENSIONS == 2048
 
 
-def test_app_settings_require_matching_embedding_and_vector_store_dimensions() -> None:
-    with pytest.raises(
-        ValueError,
-        match=re.escape(
-            "VECTOR_STORE.DIMENSIONS must match EMBEDDING.VECTOR_DIMENSIONS"
-        ),
-    ):
-        AppSettings(
+def test_app_settings_explicit_vector_store_dimensions_warns_and_overrides() -> None:
+    """VECTOR_STORE.DIMENSIONS is deprecated: EMBEDDING.VECTOR_DIMENSIONS wins
+    and the operator gets a DeprecationWarning if they set it explicitly."""
+    import warnings
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        settings = AppSettings(
             EMBEDDING=EmbeddingSettings(VECTOR_DIMENSIONS=2048),
             VECTOR_STORE=VectorStoreSettings(
                 TYPE="lancedb",
@@ -267,28 +322,47 @@ def test_app_settings_require_matching_embedding_and_vector_store_dimensions() -
                 DIMENSIONS=1536,
             ),
         )
+    messages = [
+        str(w.message) for w in captured if issubclass(w.category, DeprecationWarning)
+    ]
+    assert any(
+        "VECTOR_STORE_DIMENSIONS is deprecated" in m for m in messages
+    ), f"expected deprecation warning, got {messages!r}"
+    assert settings.EMBEDDING.VECTOR_DIMENSIONS == 2048
+    assert settings.VECTOR_STORE.DIMENSIONS == 2048, (
+        "EMBEDDING.VECTOR_DIMENSIONS should always overwrite the operator-supplied "
+        "VECTOR_STORE.DIMENSIONS value"
+    )
 
 
-def test_app_settings_reject_non_1536_dimensions_while_pgvector_or_dual_write_active() -> (
-    None
-):
-    with pytest.raises(
-        ValueError,
-        match=re.escape("EMBEDDING.VECTOR_DIMENSIONS must remain 1536"),
-    ):
-        AppSettings(
-            EMBEDDING=EmbeddingSettings(VECTOR_DIMENSIONS=2048),
-            VECTOR_STORE=VectorStoreSettings(TYPE="pgvector", MIGRATED=True),
+def test_app_settings_accepts_non_1536_with_any_vector_store_configuration() -> None:
+    """The dim-vs-MIGRATED guard was removed; the runtime startup schema
+    validator (src/startup/embedding_validator.py) is the new safety net.
+    Construction must succeed for every combination at config time."""
+    from typing import Literal
+
+    combos: list[tuple[Literal["pgvector", "turbopuffer", "lancedb"], bool]] = [
+        ("pgvector", True),
+        ("pgvector", False),
+        ("lancedb", True),
+        ("lancedb", False),
+        ("turbopuffer", True),
+        ("turbopuffer", False),
+    ]
+    for store_type, migrated in combos:
+        # Turbopuffer's model_validator requires TURBOPUFFER_API_KEY whenever
+        # TYPE="turbopuffer"; supply a dummy value so the test exercises the
+        # dim-acceptance path rather than the api-key guard.
+        vs_kwargs: dict[str, Any] = {"TYPE": store_type, "MIGRATED": migrated}
+        if store_type == "turbopuffer":
+            vs_kwargs["TURBOPUFFER_API_KEY"] = "test-key"
+        settings = AppSettings(
+            EMBEDDING=EmbeddingSettings(VECTOR_DIMENSIONS=768),
+            VECTOR_STORE=VectorStoreSettings(**vs_kwargs),
         )
-
-    with pytest.raises(
-        ValueError,
-        match=re.escape("EMBEDDING.VECTOR_DIMENSIONS must remain 1536"),
-    ):
-        AppSettings(
-            EMBEDDING=EmbeddingSettings(VECTOR_DIMENSIONS=2048),
-            VECTOR_STORE=VectorStoreSettings(TYPE="lancedb", MIGRATED=False),
-        )
+        assert settings.EMBEDDING.VECTOR_DIMENSIONS == 768
+        assert store_type == settings.VECTOR_STORE.TYPE
+        assert settings.VECTOR_STORE.MIGRATED is migrated
 
 
 def test_config_toml_example_uses_nested_model_config_sections() -> None:
@@ -518,6 +592,53 @@ def test_dialectic_level_transport_override_drops_default_thinking_params(
     assert "thinking_effort" not in minimal_mc
 
 
+def test_dialectic_settings_backfills_missing_levels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Operators only need to override the levels they care about.
+
+    Env-var overrides replace the LEVELS dict wholesale (bypassing the
+    default_factory), so without a backfill the unmentioned levels would be
+    dropped and _validate_all_levels_present would fail.
+    """
+    from src.config import (
+        DialecticSettings,
+        _default_dialectic_levels,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    for key in list(os.environ):
+        if key.startswith("DIALECTIC_LEVELS"):
+            monkeypatch.delenv(key)
+
+    settings = DialecticSettings(
+        LEVELS={  # pyright: ignore[reportArgumentType]
+            "low": {
+                "MODEL_CONFIG": {
+                    "transport": "anthropic",
+                    "model": "claude-haiku-4-5-20251001",
+                    "thinking_budget_tokens": 1024,
+                },
+                "MAX_OUTPUT_TOKENS": 2500,
+            }
+        }
+    )
+
+    assert set(settings.LEVELS.keys()) == {"minimal", "low", "medium", "high", "max"}
+    assert settings.LEVELS["low"].MODEL_CONFIG.transport == "anthropic"
+    assert settings.LEVELS["low"].MODEL_CONFIG.model == "claude-haiku-4-5-20251001"
+    assert settings.LEVELS["low"].MAX_OUTPUT_TOKENS == 2500
+    # Backfilled levels come from _default_dialectic_levels()
+    defaults = _default_dialectic_levels()
+    assert (
+        settings.LEVELS["minimal"].MAX_TOOL_ITERATIONS
+        == defaults["minimal"].MAX_TOOL_ITERATIONS
+    )
+    assert (
+        settings.LEVELS["max"].MAX_TOOL_ITERATIONS
+        == defaults["max"].MAX_TOOL_ITERATIONS
+    )
+
+
 def test_structured_output_mode_validation_openai_backed() -> None:
     valid_transports: list[ModelTransport] = ["openai", "ai-router", "nous", "lmstudio"]
     for transport in valid_transports:
@@ -632,7 +753,6 @@ def test_deriver_settings_env_empty_string_fallback_structured_output_mode_clear
     assert deriver_model_config.fallback.structured_output_mode is None
 
 
-
 @pytest.mark.asyncio
 async def test_honcho_llm_call_passes_structured_output_mode_to_langfuse() -> None:
     from unittest.mock import AsyncMock, patch
@@ -668,4 +788,3 @@ async def test_honcho_llm_call_passes_structured_output_mode_to_langfuse() -> No
             is_fallback=False,
             structured_output_mode="json_object",
         )
-
