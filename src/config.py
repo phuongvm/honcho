@@ -1520,12 +1520,11 @@ class AppSettings(HonchoSettings):
     LANGFUSE_HOST: str | None = None
     LANGFUSE_PUBLIC_KEY: str | None = None
     # How Langfuse traces are produced:
-    #   "exporter" (default) — Langfuse is a projection over the captured
-    #     CapturedLLMCall stream (LangfuseExporter), the same source of truth as
-    #     the CloudEvents trace stream.
-    #   "inline" — legacy live instrumentation (@observe + propagate_attributes
-    #     spans during execution). Kept one release for side-by-side validation.
-    LANGFUSE_EXPORTER_MODE: Literal["inline", "exporter"] = "exporter"
+    #   "inline" (default) — live instrumentation (@observe + propagate_attributes
+    #     spans during execution). Direct integration with self-hosted Langfuse.
+    #   "exporter" — Langfuse is a projection over the captured
+    #     CapturedLLMCall stream (LangfuseExporter).
+    LANGFUSE_EXPORTER_MODE: Literal["inline", "exporter"] = "inline"
 
     @property
     def langfuse_inline_enabled(self) -> bool:

@@ -35,6 +35,7 @@ async def initialize_telemetry_async() -> None:
     This should be called once at application startup (in main.py lifespan).
     It initializes:
     - CloudEvents emitter (if TELEMETRY_ENABLED=true)
+    - Langfuse exporter (if LANGFUSE_PUBLIC_KEY is configured)
 
     Note: Prometheus metrics are pull-based and require no initialization.
     Sentry is initialized separately in sentry.py as it has its own lifecycle.
@@ -42,9 +43,8 @@ async def initialize_telemetry_async() -> None:
     from src.config import settings
     from src.telemetry.events import initialize_telemetry_events
 
-    # Master switch for every trace sink, Langfuse included: telemetry off
-    # initializes nothing.
-    if settings.TELEMETRY.ENABLED:
+    # Initialize telemetry events and sinks (CloudEvents, Langfuse exporter)
+    if settings.TELEMETRY.ENABLED or settings.langfuse_exporter_enabled:
         await initialize_telemetry_events()
 
 

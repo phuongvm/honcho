@@ -48,7 +48,7 @@ def update_current_langfuse_observation(
     structured_output_mode: str | None = None,
 ) -> None:
     """Best-effort annotation of the current Langfuse span with LLM routing."""
-    if not settings.LANGFUSE_PUBLIC_KEY:
+    if not settings.langfuse_inline_enabled:
         return
 
     try:

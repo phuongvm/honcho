@@ -406,7 +406,7 @@ async def honcho_llm_call(
         if toolless_hit_input_token_cap and isinstance(result, HonchoLLMCallResponse):
             result.hit_input_token_cap = True
 
-        if isinstance(result, HonchoLLMCallResponse) and settings.LANGFUSE_PUBLIC_KEY:
+        if isinstance(result, HonchoLLMCallResponse) and settings.langfuse_inline_enabled:
             try:
                 from langfuse import get_client
 
@@ -470,7 +470,7 @@ async def honcho_llm_call(
     if run_handle is not None and isinstance(result, HonchoLLMCallResponse):
         run_handle.end(output=result.content)
 
-    if isinstance(result, HonchoLLMCallResponse) and settings.LANGFUSE_PUBLIC_KEY:
+    if isinstance(result, HonchoLLMCallResponse) and settings.langfuse_inline_enabled:
         try:
             from langfuse import get_client
 
