@@ -62,7 +62,7 @@ dev = [
 ]
 
 [tool.uv]
-exclude-newer = "5 days"
+exclude-newer = "2026-08-07T23:49:08.393963Z"
 
 [tool.uv.workspace]
 members = [
