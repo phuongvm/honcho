@@ -17,10 +17,10 @@ def resolve_id(obj: str) -> str: ...
 
 
 @overload
-def resolve_id(obj: "PeerBase | SessionBase | ScopeBase") -> str: ...
+def resolve_id(obj: PeerBase | SessionBase | ScopeBase) -> str: ...
 
 
-def resolve_id(obj: "str | PeerBase | SessionBase | ScopeBase | None") -> str | None:
+def resolve_id(obj: str | PeerBase | SessionBase | ScopeBase | None) -> str | None:
     """
     Resolve an ID from a string, PeerBase, SessionBase, ScopeBase, or None.
 

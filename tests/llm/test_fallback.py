@@ -7,12 +7,11 @@ Tests cover:
 - force_fallback ContextVar behavior
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from src.config import (
-    ConfiguredModelSettings,
-    FallbackModelSettings,
     ModelConfig,
     ResolvedFallbackConfig,
 )
@@ -21,7 +20,6 @@ from src.llm.runtime import (
     plan_attempt,
     select_model_config_for_attempt,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

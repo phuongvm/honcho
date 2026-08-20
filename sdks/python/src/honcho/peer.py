@@ -72,7 +72,7 @@ class Peer(PeerBase, MetadataConfigMixin):
     _metadata: dict[str, object] | None = PrivateAttr(default=None)
     _configuration: PeerConfig | None = PrivateAttr(default=None)
     _created_at: datetime.datetime | None = PrivateAttr(default=None)
-    _honcho: "Honcho" = PrivateAttr()
+    _honcho: Honcho = PrivateAttr()
 
     @property
     def metadata(self) -> dict[str, object] | None:
@@ -167,7 +167,7 @@ class Peer(PeerBase, MetadataConfigMixin):
         self._configuration = configuration
 
     @property
-    def aio(self) -> "PeerAio":
+    def aio(self) -> PeerAio:
         """
         Access async versions of all Peer methods.
 
@@ -434,7 +434,7 @@ class Peer(PeerBase, MetadataConfigMixin):
         page: int = 1,
         size: int = 50,
         reverse: bool = False,
-    ) -> SyncPage[SessionResponse, "Session"]:
+    ) -> SyncPage[SessionResponse, Session]:
         """
         Get all sessions this peer is a member of.
 

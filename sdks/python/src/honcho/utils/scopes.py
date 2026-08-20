@@ -73,7 +73,7 @@ def validate_scope_id(value: str) -> str:
 
 
 def resolve_scope_option(
-    scope: "str | ScopeBase | Sequence[str | ScopeBase]",
+    scope: str | ScopeBase | Sequence[str | ScopeBase],
 ) -> str | list[str]:
     """Resolve the ``scope`` read option to its wire value.
 
@@ -107,7 +107,7 @@ def resolve_scope_option(
 
 
 def resolve_session_allowlist(
-    sessions: "Sequence[str | SessionBase]",
+    sessions: Sequence[str | SessionBase],
 ) -> list[str]:
     """Resolve the ``sessions`` allowlist option to a list of session IDs.
 
@@ -152,7 +152,7 @@ def _validate_session_id(value: str) -> str:
     return value
 
 
-def resolve_scope_session(session: "str | SessionBase") -> str:
+def resolve_scope_session(session: str | SessionBase) -> str:
     """Resolve and validate a single session ID for a scope membership change.
 
     Validated rather than passed through because this ID is interpolated into a
@@ -174,7 +174,7 @@ def resolve_scope_session(session: "str | SessionBase") -> str:
 
 
 def resolve_scope_membership(
-    sessions: "Sequence[str | SessionBase]",
+    sessions: Sequence[str | SessionBase],
 ) -> list[str]:
     """Resolve a scope membership change to a list of session IDs.
 
@@ -203,8 +203,8 @@ def resolve_scope_membership(
 
 def scope_context_fields(
     *,
-    scope: "str | ScopeBase | None",
-    sessions: "Sequence[str | SessionBase] | None",
+    scope: str | ScopeBase | None,
+    sessions: Sequence[str | SessionBase] | None,
     peer_target: str | None,
     peer_perspective: str | None,
     limit_to_session: bool,
@@ -260,8 +260,8 @@ def scope_context_fields(
 
 def scope_recall_fields(
     *,
-    scope: "str | ScopeBase | Sequence[str | ScopeBase] | None",
-    sessions: "Sequence[str | SessionBase] | None",
+    scope: str | ScopeBase | Sequence[str | ScopeBase] | None,
+    sessions: Sequence[str | SessionBase] | None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
     """Build the request-body fields for the ``scope``/``sessions`` options.

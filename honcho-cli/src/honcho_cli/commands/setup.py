@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 import webbrowser
@@ -14,8 +15,12 @@ import typer
 from honcho import (
     APIError,
     AuthenticationError,
-    ConnectionError as HonchoConnectionError,
     Honcho,
+)
+from honcho import (
+    ConnectionError as HonchoConnectionError,
+)
+from honcho import (
     TimeoutError as HonchoTimeoutError,
 )
 from rich.console import Console
@@ -157,10 +162,8 @@ def _init_interactive(key_val: str, url_val: str, file_url: str) -> None:
             _console.print(f"  {ICON_OK} [dim]Saved to {CONFIG_FILE}[/dim]")
         # refresh an expired token so "keep" behaves like every live command;
         # a failed refresh surfaces as the connectivity check below, not an abort
-        try:
+        with contextlib.suppress(typer.Exit):
             maybe_refresh_token(existing)
-        except typer.Exit:
-            pass
         _check_connection(final_url, existing.resolved_api_key())
         return
 
@@ -221,32 +224,30 @@ def _device_login(base_url: str) -> OAuthTokens:
         device = oauth.request_device_code(endpoints)
     except oauth.OAuthFlowError as e:
         _console.print(f"  {ICON_FAIL} [red]Could not start device login[/red]: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     _console.print()
     _console.print(f"  Enter this code to authorize: [bold {BRAND}]{device.user_code}[/bold {BRAND}]")
     _console.print(f"  [dim]at[/dim] {device.verification_uri}")
     _console.print()
-    try:
+    with contextlib.suppress(Exception):
         webbrowser.open(device.verification_uri_complete)
-    except Exception:
-        pass  # headless is expected — the URL is printed above
 
     try:
         with _console.status("Waiting for approval…", spinner="dots"):
             tokens = oauth.poll_for_token(endpoints, device)
-    except oauth.AccessDenied:
+    except oauth.AccessDenied as e:
         _console.print(f"  {ICON_FAIL} [red]Authorization denied[/red]")
-        raise typer.Exit(1)
-    except (oauth.DeviceCodeExpired, oauth.AuthorizationTimeout):
+        raise typer.Exit(1) from e
+    except (oauth.DeviceCodeExpired, oauth.AuthorizationTimeout) as e:
         _console.print(f"  {ICON_FAIL} [red]Code expired[/red] — run `honcho init` to try again")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except oauth.OAuthFlowError as e:
         _console.print(f"  {ICON_FAIL} [red]Login failed[/red]: {e}")
-        raise typer.Exit(1)
-    except KeyboardInterrupt:
+        raise typer.Exit(1) from e
+    except KeyboardInterrupt as e:
         _console.print(f"  {ICON_FAIL} [red]Cancelled[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     return OAuthTokens.from_response(
         tokens,
@@ -371,10 +372,8 @@ def doctor(
     config = get_resolved_config()
     # Refresh an expired OAuth token if we can; a failure surfaces as a failed
     # connectivity check below rather than aborting the diagnostic.
-    try:
+    with contextlib.suppress(typer.Exit):
         maybe_refresh_token(config)
-    except typer.Exit:
-        pass
     key = config.resolved_api_key()
 
     _add("Config file", CONFIG_FILE.exists(),

@@ -14,11 +14,10 @@ The flow:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -225,7 +224,7 @@ async def refresh_nous_credentials() -> str | None:
 
         # 6. Update in-memory settings globally (if Honcho is running)
         try:
-            from honcho.config import settings
+            from src.config import settings
             settings.LLM.NOUS_API_KEY = agent_key
             logger.info("In-memory settings.LLM.NOUS_API_KEY updated")
         except Exception:

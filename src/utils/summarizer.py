@@ -22,7 +22,7 @@ from src.models import Message
 from src.telemetry import prometheus_metrics
 from src.telemetry.events import AgentToolSummaryCreatedEvent, emit
 from src.telemetry.events.llm import CallPurpose
-from src.telemetry.logging import accumulate_metric, conditional_observe
+from src.telemetry.logging import accumulate_metric
 from src.telemetry.prometheus.metrics import (
     DeriverComponents,
     DeriverTaskTypes,

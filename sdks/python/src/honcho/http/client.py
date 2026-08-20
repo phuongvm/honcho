@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from typing import Any, cast
 
 import httpx
+from typing_extensions import Self
 
 from .exceptions import (
     ConnectionError,
@@ -66,10 +67,10 @@ class HonchoHTTPClient:
         if self._owns_client:
             self._client.close()
 
-    def __enter__(self) -> "HonchoHTTPClient":
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self.close()
 
     def request(
@@ -265,8 +266,7 @@ class HonchoHTTPClient:
                     body=error_body,
                 )
 
-            for chunk in response.iter_bytes():
-                yield chunk
+            yield from response.iter_bytes()
 
     def upload(
         self,

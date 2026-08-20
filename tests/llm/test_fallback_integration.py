@@ -6,8 +6,9 @@ Tests the full honcho_llm_call() flow with mocked backends to verify:
 - Both fail → error raised
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
 
 from src.config import (
     ConfiguredModelSettings,
@@ -15,7 +16,6 @@ from src.config import (
 )
 from src.llm.api import honcho_llm_call
 from src.llm.backend import CompletionResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers

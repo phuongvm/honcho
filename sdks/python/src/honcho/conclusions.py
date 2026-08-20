@@ -20,8 +20,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Conclusion",
-    "ConclusionsView",
     "ConclusionCreateParams",
+    "ConclusionsView",
 ]
 
 # Filter keys that define a conclusions view (the observer/observed peer pair).
@@ -104,7 +104,7 @@ class Conclusion:
         self.created_at = created_at
 
     @classmethod
-    def from_api_response(cls, data: ConclusionResponse) -> "Conclusion":
+    def from_api_response(cls, data: ConclusionResponse) -> Conclusion:
         """Create a Conclusion from an API response."""
         return cls(
             id=data.id,
@@ -152,14 +152,14 @@ class ConclusionsView:
         ```
     """
 
-    _honcho: "Honcho"
+    _honcho: Honcho
     workspace_id: str
     observer: str
     observed: str
 
     def __init__(
         self,
-        honcho: "Honcho",
+        honcho: Honcho,
         workspace_id: str,
         observer: str,
         observed: str,
@@ -179,7 +179,7 @@ class ConclusionsView:
         self.observed = observed
 
     @property
-    def aio(self) -> "ConclusionsViewAio":
+    def aio(self) -> ConclusionsViewAio:
         """
         Access async versions of all ConclusionsView methods.
 

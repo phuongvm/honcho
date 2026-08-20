@@ -530,7 +530,7 @@ class Honcho(BaseModel, MetadataConfigMixin):  # pyright: ignore[reportUnsafeMul
     @validate_call
     def scope(
         self,
-        id: str = Field(  # noqa: A002
+        id: str = Field(
             ..., min_length=1, description="Unprefixed name for the scope"
         ),
         *,

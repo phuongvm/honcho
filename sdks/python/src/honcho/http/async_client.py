@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import httpx
+from typing_extensions import Self
 
 from .exceptions import (
     ConnectionError,
@@ -66,10 +67,10 @@ class AsyncHonchoHTTPClient:
         if self._owns_client:
             await self._client.aclose()
 
-    async def __aenter__(self) -> "AsyncHonchoHTTPClient":
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         await self.close()
 
     async def request(
@@ -349,7 +350,7 @@ class AsyncHonchoHTTPClient:
                     **body_dict,
                 }
             return {"message": str(body)}
-        except Exception:
+        except (ValueError, TypeError, KeyError):
             return {"message": f"HTTP {response.status_code}"}
 
     def _parse_retry_after(self, response: httpx.Response) -> float | None:
@@ -373,7 +374,7 @@ class AsyncHonchoHTTPClient:
             dt: datetime = parsedate_to_datetime(header)
             timestamp: float = dt.timestamp()
             return max(0.0, timestamp - time.time())
-        except Exception:
+        except (ValueError, TypeError):
             return None
 
     def _get_retry_delay(self, attempt: int, retry_after: float | None = None) -> float:

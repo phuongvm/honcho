@@ -25,6 +25,7 @@ pass ``-w`` / ``-p`` / ``-s`` flags or set ``HONCHO_WORKSPACE_ID`` /
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -252,10 +253,8 @@ class CLIConfig:
 
         CONFIG_FILE.write_text(json.dumps(data, indent=2) + "\n")
         # API key in plaintext — restrict to the owner on multi-user hosts.
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(CONFIG_FILE, 0o600)
-        except OSError:
-            pass
 
     def redacted(self) -> dict[str, str]:
         """Return config dict with api_key redacted.

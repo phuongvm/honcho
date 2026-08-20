@@ -69,7 +69,6 @@ class WorkspaceConfiguration(BaseModel):
 class SessionConfiguration(WorkspaceConfiguration):
     """Session-level configuration options."""
 
-    pass
 
 
 class WorkspaceConfigurationResponse(WorkspaceConfiguration):
@@ -370,7 +369,7 @@ class SessionContextResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)  # pyright: ignore[reportUnannotatedClassAttribute]
 
     id: str
-    messages: list["MessageResponse"]
+    messages: list[MessageResponse]
     summary: Summary | None = None
     peer_representation: str | None = None
     peer_card: list[str] | None = None

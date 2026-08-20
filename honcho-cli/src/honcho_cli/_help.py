@@ -25,7 +25,6 @@ from honcho_cli import __version__
 from honcho_cli.branding import BANNER, BRAND
 from honcho_cli.output import use_json
 
-
 # Theme Typer's rich help renderer. Module-level side effect limited to
 # styling — no behavior changes that could surprise other Typer users.
 ru.STYLE_COMMANDS_PANEL_BORDER = "dim"

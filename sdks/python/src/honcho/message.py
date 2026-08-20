@@ -56,7 +56,7 @@ class Message:
         self.token_count = token_count
 
     @classmethod
-    def from_api_response(cls, data: MessageResponse) -> "Message":
+    def from_api_response(cls, data: MessageResponse) -> Message:
         """Create a Message from an API response."""
         return cls(
             id=data.id,

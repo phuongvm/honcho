@@ -18,11 +18,11 @@ from .scopes import (
 from .sse import SSEStreamParser, parse_sse_astream, parse_sse_chunk, parse_sse_stream
 
 __all__ = [
+    "SSEStreamParser",
     "datetime_to_iso",
-    "parse_datetime",
     "normalize_file_input",
     "normalize_peers_to_dict",
-    "SSEStreamParser",
+    "parse_datetime",
     "parse_sse_astream",
     "parse_sse_chunk",
     "parse_sse_stream",

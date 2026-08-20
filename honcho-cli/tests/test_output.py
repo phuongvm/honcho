@@ -9,7 +9,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
-
 from honcho_cli import output
 from honcho_cli.output import _format_timestamp, print_transcript
 

@@ -66,7 +66,7 @@ class Session(SessionBase, MetadataConfigMixin):
     _configuration: SessionConfiguration | None = PrivateAttr(default=None)
     _created_at: datetime | None = PrivateAttr(default=None)
     _is_active: bool | None = PrivateAttr(default=None)
-    _honcho: "Honcho" = PrivateAttr()
+    _honcho: Honcho = PrivateAttr()
 
     @property
     def metadata(self) -> dict[str, object] | None:
@@ -181,7 +181,7 @@ class Session(SessionBase, MetadataConfigMixin):
         self._configuration = configuration
 
     @property
-    def aio(self) -> "SessionAio":
+    def aio(self) -> SessionAio:
         """
         Access async versions of all Session methods.
 
@@ -511,7 +511,7 @@ class Session(SessionBase, MetadataConfigMixin):
         self,
         *,
         message_id: str | None = None,
-    ) -> "Session":
+    ) -> Session:
         """
         Clone this session, optionally up to a specific message.
 

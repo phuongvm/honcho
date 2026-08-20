@@ -1,5 +1,6 @@
 """Tests for Nous registry wiring with shared auth.json."""
 
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -24,12 +25,16 @@ def test_nous_client_can_bootstrap_from_auth_provider_without_static_key(
             api_key: str | None,
             base_url: str | None = None,
             timeout: float | None = None,
+            default_headers: dict[str, str] | None = None,
+            **kwargs: Any,
         ) -> None:
             created_clients.append(
                 {"api_key": api_key, "base_url": base_url, "timeout": str(timeout)}
             )
 
-    monkeypatch.setattr(registry, "AsyncOpenAI", FakeOpenAI)
+    import openai
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", FakeOpenAI)
     registry.get_openai_override_client.cache_clear()
 
     client = registry.client_for_model_config(

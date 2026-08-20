@@ -37,9 +37,9 @@ Usage:
         print(p.id)
 """
 
+import re
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-import re
 
 from .aio import ConclusionsViewAio, HonchoAio, PeerAio, ScopeAio, SessionAio
 from .api_types import (
@@ -103,53 +103,53 @@ __author__ = "Plastic Labs"
 __email__ = "hello@plasticlabs.ai"
 
 __all__ = [
-    # Client
-    "Honcho",
+    # Exceptions
+    "APIError",
+    # Streaming
+    "AsyncDialecticStreamResponse",
+    # Pagination
+    "AsyncPage",
+    "AuthenticationError",
+    "BadRequestError",
     # Domain classes
     "Conclusion",
-    "ConclusionsView",
-    "Message",
-    "MessageCreateParams",
-    "Peer",
-    "Scope",
-    "Session",
-    # Aio views (for type hints)
-    "ConclusionsViewAio",
-    "HonchoAio",
-    "PeerAio",
-    "ScopeAio",
-    "SessionAio",
-    # Base classes
-    "PeerBase",
-    "ScopeBase",
-    "SessionBase",
-    # Response types
-    "ScopeBackfillJob",
-    "ScopeResponse",
-    "ScopeStatusResponse",
-    "SessionContext",
-    "SessionSummaries",
-    "Summary",
     # Deprecated aliases
     "ConclusionScope",
     "ConclusionScopeAio",
-    # Pagination
-    "AsyncPage",
-    "SyncPage",
-    # Streaming
-    "AsyncDialecticStreamResponse",
-    "DialecticStreamResponse",
-    # Exceptions
-    "APIError",
-    "AuthenticationError",
-    "BadRequestError",
+    "ConclusionsView",
+    # Aio views (for type hints)
+    "ConclusionsViewAio",
     "ConflictError",
     "ConnectionError",
+    "DialecticStreamResponse",
+    # Client
+    "Honcho",
+    "HonchoAio",
     "HonchoError",
+    "Message",
+    "MessageCreateParams",
     "NotFoundError",
+    "Peer",
+    "PeerAio",
+    # Base classes
+    "PeerBase",
     "PermissionDeniedError",
     "RateLimitError",
+    "Scope",
+    "ScopeAio",
+    # Response types
+    "ScopeBackfillJob",
+    "ScopeBase",
+    "ScopeResponse",
+    "ScopeStatusResponse",
     "ServerError",
+    "Session",
+    "SessionAio",
+    "SessionBase",
+    "SessionContext",
+    "SessionSummaries",
+    "Summary",
+    "SyncPage",
     "TimeoutError",
     "UnprocessableEntityError",
 ]

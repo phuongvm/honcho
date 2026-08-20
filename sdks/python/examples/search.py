@@ -18,7 +18,7 @@ alice = peers[0]
 session = honcho.session("search_test_" + str(uuid.uuid4()))
 
 # Create a message with our special keyword
-keyword = f"~special-{str(uuid.uuid4())}~"
+keyword = f"~special-{uuid.uuid4()!s}~"
 session.add_messages(alice.message(f"I am a {keyword} message"))
 
 # Generate some random messages from alice, bob, and charlie and add them to the session

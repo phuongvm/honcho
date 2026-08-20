@@ -11,7 +11,7 @@ from typing_extensions import TypeVar
 T = TypeVar("T", bound=BaseModel)
 U = TypeVar("U", default=T)
 
-__all__ = ["SyncPage", "AsyncPage"]
+__all__ = ["AsyncPage", "SyncPage"]
 
 
 class SyncPage(Generic[T, U]):
@@ -26,7 +26,7 @@ class SyncPage(Generic[T, U]):
         data: dict[str, Any],
         item_type: type[T],
         transform_func: Callable[[T], U] | None = None,
-        fetch_next: Callable[[int], "SyncPage[T, U]"] | None = None,
+        fetch_next: Callable[[int], SyncPage[T, U]] | None = None,
     ) -> None:
         """
         Initialize the page.
@@ -41,7 +41,7 @@ class SyncPage(Generic[T, U]):
         self._data: dict[str, Any] = data
         self._item_type: type[T] = item_type
         self._transform_func: Callable[[T], U] | None = transform_func
-        self._fetch_next: Callable[[int], "SyncPage[T, U]"] | None = fetch_next
+        self._fetch_next: Callable[[int], SyncPage[T, U]] | None = fetch_next
 
         # Parse items
         raw_items = data.get("items", [])
@@ -113,7 +113,7 @@ class SyncPage(Generic[T, U]):
             return False
         return current_page < total_pages
 
-    def get_next_page(self) -> "SyncPage[T, U] | None":
+    def get_next_page(self) -> SyncPage[T, U] | None:
         """
         Fetch the next page of results.
 
@@ -143,7 +143,7 @@ class AsyncPage(Generic[T, U]):
         data: dict[str, Any],
         item_type: type[T],
         transform_func: Callable[[T], U] | None = None,
-        fetch_next: Callable[[int], Awaitable["AsyncPage[T, U]"]] | None = None,
+        fetch_next: Callable[[int], Awaitable[AsyncPage[T, U]]] | None = None,
     ) -> None:
         """
         Initialize the async page.
@@ -158,7 +158,7 @@ class AsyncPage(Generic[T, U]):
         self._data: dict[str, Any] = data
         self._item_type: type[T] = item_type
         self._transform_func: Callable[[T], U] | None = transform_func
-        self._fetch_next: Callable[[int], Awaitable["AsyncPage[T, U]"]] | None = (
+        self._fetch_next: Callable[[int], Awaitable[AsyncPage[T, U]]] | None = (
             fetch_next
         )
 
@@ -232,7 +232,7 @@ class AsyncPage(Generic[T, U]):
             return False
         return current_page < total_pages
 
-    async def get_next_page(self) -> "AsyncPage[T, U] | None":
+    async def get_next_page(self) -> AsyncPage[T, U] | None:
         """
         Fetch the next page of results.
 

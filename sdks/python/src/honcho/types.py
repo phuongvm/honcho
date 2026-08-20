@@ -6,8 +6,8 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Self
 
 __all__ = [
-    "DialecticStreamResponse",
     "AsyncDialecticStreamResponse",
+    "DialecticStreamResponse",
 ]
 
 

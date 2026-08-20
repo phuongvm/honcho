@@ -114,15 +114,19 @@ class TestRequestDeviceCode:
 
     def test_error_raises(self):
         body = {"error": "invalid_client", "error_description": "unknown client"}
-        with patch("honcho_cli.oauth.httpx.post", return_value=FakeResponse(401, body)):
-            with pytest.raises(OAuthFlowError) as exc:
-                oauth.request_device_code(_endpoints())
+        with (
+            patch("honcho_cli.oauth.httpx.post", return_value=FakeResponse(401, body)),
+            pytest.raises(OAuthFlowError) as exc,
+        ):
+            oauth.request_device_code(_endpoints())
         assert exc.value.error == "invalid_client"
 
     def test_transport_failure_wrapped(self):
-        with patch("honcho_cli.oauth.httpx.post", side_effect=httpx.ConnectError("no route")):
-            with pytest.raises(OAuthFlowError) as exc:
-                oauth.request_device_code(_endpoints())
+        with (
+            patch("honcho_cli.oauth.httpx.post", side_effect=httpx.ConnectError("no route")),
+            pytest.raises(OAuthFlowError) as exc,
+        ):
+            oauth.request_device_code(_endpoints())
         assert exc.value.error == "connection_error"
 
 
@@ -188,14 +192,16 @@ class TestPollForToken:
 
     def test_times_out_past_deadline(self):
         # monotonic jumps past deadline (0 + expires_in) on the first check
-        with patch("honcho_cli.oauth.httpx.post") as post:
-            with pytest.raises(AuthorizationTimeout):
-                oauth.poll_for_token(
-                    _endpoints(),
-                    DEVICE,
-                    sleep=lambda _s: None,
-                    monotonic=iter([0.0, 9999.0]).__next__,
-                )
+        with (
+            patch("honcho_cli.oauth.httpx.post") as post,
+            pytest.raises(AuthorizationTimeout),
+        ):
+            oauth.poll_for_token(
+                _endpoints(),
+                DEVICE,
+                sleep=lambda _s: None,
+                monotonic=iter([0.0, 9999.0]).__next__,
+            )
         post.assert_not_called()
 
 
@@ -220,13 +226,17 @@ class TestRefresh:
 
     def test_error_raises(self):
         body = {"error": "invalid_grant", "error_description": "revoked"}
-        with patch("honcho_cli.oauth.httpx.post", return_value=FakeResponse(400, body)):
-            with pytest.raises(OAuthFlowError) as exc:
-                oauth.refresh_access_token(_endpoints(), "stale")
+        with (
+            patch("honcho_cli.oauth.httpx.post", return_value=FakeResponse(400, body)),
+            pytest.raises(OAuthFlowError) as exc,
+        ):
+            oauth.refresh_access_token(_endpoints(), "stale")
         assert exc.value.error == "invalid_grant"
 
     def test_transport_failure_wrapped(self):
-        with patch("honcho_cli.oauth.httpx.post", side_effect=httpx.ConnectError("no route")):
-            with pytest.raises(OAuthFlowError) as exc:
-                oauth.refresh_access_token(_endpoints(), "hch-rt-1")
+        with (
+            patch("honcho_cli.oauth.httpx.post", side_effect=httpx.ConnectError("no route")),
+            pytest.raises(OAuthFlowError) as exc,
+        ):
+            oauth.refresh_access_token(_endpoints(), "hch-rt-1")
         assert exc.value.error == "connection_error"

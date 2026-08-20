@@ -58,7 +58,7 @@ class Scope(ScopeBase):
 
     _metadata: dict[str, Any] | None = PrivateAttr(default=None)
     _created_at: datetime | None = PrivateAttr(default=None)
-    _honcho: "Honcho" = PrivateAttr()
+    _honcho: Honcho = PrivateAttr()
 
     @property
     def metadata(self) -> dict[str, Any] | None:
@@ -73,7 +73,7 @@ class Scope(ScopeBase):
     def __init__(
         self,
         scope_id: str,
-        honcho: "Honcho",
+        honcho: Honcho,
         *,
         metadata: dict[str, Any] | None = None,
         created_at: datetime | None = None,
@@ -98,7 +98,7 @@ class Scope(ScopeBase):
         self._created_at = created_at
 
     @property
-    def aio(self) -> "ScopeAio":
+    def aio(self) -> ScopeAio:
         """
         Access async versions of all Scope methods.
 

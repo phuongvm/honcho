@@ -9,15 +9,14 @@ settings into concrete runtime ModelConfigs.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
-from typing import Any, Callable, Literal, TypeVar, overload
+from collections.abc import AsyncIterator, Callable
+from typing import Any, Literal, TypeVar, overload
 
 from pydantic import BaseModel
 from sentry_sdk.ai.monitoring import ai_track
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.config import ConfiguredModelSettings, ModelConfig, settings
-from src.exceptions import ValidationException
 from src.telemetry.logging import conditional_observe
 from src.telemetry.reasoning_traces import log_reasoning_trace
 
@@ -36,6 +35,7 @@ from .tool_loop import execute_tool_loop
 from .types import (
     HonchoLLMCallResponse,
     HonchoLLMCallStreamChunk,
+    IterationCallback,
     LLMTelemetryContext,
     ReasoningEffortType,
     StreamingResponseWithMetadata,
@@ -72,9 +72,7 @@ async def honcho_llm_call(
     max_input_tokens: int | None = None,
     track_name: str | None = None,
     stream_final_only: bool = False,
-    iteration_callback: (
-        Callable[[int, list[dict[str, Any]], HonchoLLMCallResponse[Any]], None] | None
-    ) = None,
+    iteration_callback: IterationCallback | None = None,
     telemetry: LLMTelemetryContext | None = None,
 ) -> HonchoLLMCallResponse[str]: ...
 
@@ -104,9 +102,7 @@ async def honcho_llm_call(
     max_input_tokens: int | None = None,
     track_name: str | None = None,
     stream_final_only: bool = False,
-    iteration_callback: (
-        Callable[[int, list[dict[str, Any]], HonchoLLMCallResponse[Any]], None] | None
-    ) = None,
+    iteration_callback: IterationCallback | None = None,
     telemetry: LLMTelemetryContext | None = None,
 ) -> HonchoLLMCallResponse[M]: ...
 
@@ -136,9 +132,7 @@ async def honcho_llm_call(
     max_input_tokens: int | None = None,
     track_name: str | None = None,
     stream_final_only: bool = False,
-    iteration_callback: (
-        Callable[[int, list[dict[str, Any]], HonchoLLMCallResponse[Any]], None] | None
-    ) = None,
+    iteration_callback: IterationCallback | None = None,
     telemetry: LLMTelemetryContext | None = None,
 ) -> AsyncIterator[HonchoLLMCallStreamChunk] | StreamingResponseWithMetadata: ...
 
@@ -168,9 +162,7 @@ async def honcho_llm_call(
     max_input_tokens: int | None = None,
     track_name: str | None = None,
     stream_final_only: bool = False,
-    iteration_callback: (
-        Callable[[int, list[dict[str, Any]], HonchoLLMCallResponse[Any]], None] | None
-    ) = None,
+    iteration_callback: IterationCallback | None = None,
     telemetry: LLMTelemetryContext | None = None,
 ) -> (
     HonchoLLMCallResponse[Any]
@@ -224,6 +216,28 @@ async def honcho_llm_call(
         | StreamingResponseWithMetadata
     ):
         plan = _get_attempt_plan()
+        if stream:
+            return await honcho_llm_call_inner(
+                plan.provider,
+                plan.model,
+                prompt,
+                max_tokens,
+                response_model=response_model,
+                json_mode=json_mode,
+                temperature=effective_temperature(temperature),
+                stop_seqs=stop_seqs,
+                reasoning_effort=plan.reasoning_effort,
+                verbosity=verbosity,
+                thinking_budget_tokens=plan.thinking_budget_tokens,
+                stream=True,
+                client_override=plan.client,
+                tools=tools,
+                tool_choice=tool_choice,
+                selected_config=plan.selected_config,
+                plan=plan,
+                telemetry=telemetry,
+                messages=messages,
+            )
         return await honcho_llm_call_inner(
             plan.provider,
             plan.model,
@@ -236,7 +250,7 @@ async def honcho_llm_call(
             reasoning_effort=plan.reasoning_effort,
             verbosity=verbosity,
             thinking_budget_tokens=plan.thinking_budget_tokens,
-            stream=stream,
+            stream=False,
             client_override=plan.client,
             tools=tools,
             tool_choice=tool_choice,
@@ -279,15 +293,18 @@ async def honcho_llm_call(
 
         exc = retry_state.outcome.exception() if retry_state.outcome else None
         if exc is not None:
-            if runtime_model_config.fallback is not None and _is_retryable_error(exc):
-                if not force_fallback.get():
-                    logger.warning(
-                        "Retryable error detected on primary model (%s: %s). "
-                        "Activating immediate fast fallback for next attempt.",
-                        type(exc).__name__,
-                        exc,
-                    )
-                    force_fallback.set(True)
+            if (
+                runtime_model_config.fallback is not None
+                and _is_retryable_error(exc)
+                and not force_fallback.get()
+            ):
+                logger.warning(
+                    "Retryable error detected on primary model (%s: %s). "
+                    "Activating immediate fast fallback for next attempt.",
+                    type(exc).__name__,
+                    exc,
+                )
+                force_fallback.set(True)
 
             logger.warning(
                 "LLM call attempt %d/%d failed with %s: %s. Retrying...",
@@ -406,12 +423,12 @@ async def honcho_llm_call(
         if trace_name and isinstance(result, HonchoLLMCallResponse):
             log_reasoning_trace(
                 task_type=trace_name,
-                messages=messages or [{"role": "user", "content": prompt}],
-                result=result,
                 model_config=runtime_model_config,
+                prompt=prompt,
+                response=result,
                 max_tokens=max_tokens,
-                temperature=temperature,
-                stop=stop_seqs,
+                stop_seqs=stop_seqs,
+                messages=messages or [{"role": "user", "content": prompt}],
             )
         return result
 
@@ -470,11 +487,11 @@ async def honcho_llm_call(
     if trace_name and isinstance(result, HonchoLLMCallResponse):
         log_reasoning_trace(
             task_type=trace_name,
-            messages=messages or [{"role": "user", "content": prompt}],
-            result=result,
             model_config=runtime_model_config,
+            prompt=prompt,
+            response=result,
             max_tokens=max_tokens,
-            temperature=temperature,
-            stop=stop_seqs,
+            stop_seqs=stop_seqs,
+            messages=messages or [{"role": "user", "content": prompt}],
         )
     return result

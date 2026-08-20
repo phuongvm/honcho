@@ -38,7 +38,6 @@ _EMBEDDING_KNOWN_REJECTING_MODELS: frozenset[str] = frozenset(
 # Hosts known to serve base64 embeddings, which are ~3.6x smaller on the wire.
 _EMBEDDING_BASE64_CAPABLE_HOSTS: frozenset[str] = frozenset({"api.openai.com"})
 
-StructuredOutputMode = Literal["json_schema", "json_object"]
 OPENAI_BACKEND_TRANSPORTS = frozenset({"openai", "ai-router", "nous", "lmstudio"})
 
 

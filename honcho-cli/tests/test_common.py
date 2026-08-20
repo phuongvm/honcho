@@ -97,9 +97,11 @@ def test_expired_token_refreshes_and_persists(cfg_path):
 
 def test_refresh_failure_exits(cfg_path):
     config = _cfg(time.time() - 100)
-    with patch("honcho_cli.oauth.refresh_access_token", side_effect=OAuthFlowError("invalid_grant")):
-        with pytest.raises(typer.Exit):
-            common.maybe_refresh_token(config)
+    with (
+        patch("honcho_cli.oauth.refresh_access_token", side_effect=OAuthFlowError("invalid_grant")),
+        pytest.raises(typer.Exit),
+    ):
+        common.maybe_refresh_token(config)
 
 
 def test_refresh_failure_falls_back_to_api_key(cfg_path):
