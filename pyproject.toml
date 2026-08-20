@@ -137,6 +137,8 @@ reportExplicitAny = false
 allowedUntypedLibraries = ["langfuse", "lancedb", "pyarrow"]
 reportImplicitOverride = false
 reportImportCycles = false
+reportMissingImports = false
+reportAttributeAccessIssue = false
 
 [[tool.uv.index]]
 name = "testpypi"

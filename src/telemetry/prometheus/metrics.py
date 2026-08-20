@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from enum import Enum
-from typing import cast, final
+from typing import Any, cast, final
 
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
@@ -28,21 +28,21 @@ logger = logging.getLogger(__name__)
 
 
 class NamespacedCounter(Counter):
-    def labels(self, **kwargs: str) -> NamespacedCounter:
+    def labels(self, *labelvalues: Any, **kwargs: str) -> NamespacedCounter:
         kwargs["namespace"] = cast(str, settings.METRICS.NAMESPACE)
-        return super().labels(**kwargs)  # type: ignore[return-value]
+        return super().labels(*labelvalues, **kwargs)  # type: ignore[return-value]
 
 
 class NamespacedGauge(Gauge):
-    def labels(self, **kwargs: str) -> NamespacedGauge:
+    def labels(self, *labelvalues: Any, **kwargs: str) -> NamespacedGauge:
         kwargs["namespace"] = cast(str, settings.METRICS.NAMESPACE)
-        return super().labels(**kwargs)  # type: ignore[return-value]
+        return super().labels(*labelvalues, **kwargs)  # type: ignore[return-value]
 
 
 class NamespacedHistogram(Histogram):
-    def labels(self, **kwargs: str) -> NamespacedHistogram:
+    def labels(self, *labelvalues: Any, **kwargs: str) -> NamespacedHistogram:
         kwargs["namespace"] = cast(str, settings.METRICS.NAMESPACE)
-        return super().labels(**kwargs)  # type: ignore[return-value]
+        return super().labels(*labelvalues, **kwargs)  # type: ignore[return-value]
 
 
 class TokenTypes(Enum):
