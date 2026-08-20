@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from pydantic import BaseModel
 
 from src.exceptions import ValidationException
 from src.llm.backends.openai import OpenAIBackend
@@ -274,3 +275,172 @@ def test_openai_classic_models_use_max_tokens(model: str) -> None:
     )
 
     assert _uses_max_completion_tokens(model) is False
+
+
+class SimpleSchema(BaseModel):
+    name: str
+    age: int
+
+
+@pytest.mark.asyncio
+async def test_openai_backend_json_object_mode_request_shape_and_injection() -> None:
+    client = Mock()
+    client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(
+                        content='{"name": "Alice", "age": 30}',
+                        tool_calls=[],
+                        reasoning_details=[],
+                    ),
+                )
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=10,
+                completion_tokens=5,
+                prompt_tokens_details=None,
+            ),
+        )
+    )
+
+    backend = OpenAIBackend(client)
+    input_messages = [{"role": "user", "content": "Extract Alice, age 30"}]
+    result = await backend.complete(
+        model="cb-gemini-flash-high",
+        messages=input_messages,
+        max_tokens=100,
+        response_format=SimpleSchema,
+        extra_params={"structured_output_mode": "json_object"},
+    )
+
+    # 1. Output content is parsed model
+    assert isinstance(result.content, SimpleSchema)
+    assert result.content.name == "Alice"
+    assert result.content.age == 30
+
+    # 2. Input messages were not mutated
+    assert len(input_messages) == 1
+
+    # 3. create() was called with response_format={"type": "json_object"}
+    await_args = client.chat.completions.create.await_args
+    assert await_args is not None
+    call = await_args.kwargs
+    assert call["response_format"] == {"type": "json_object"}
+
+    # 4. Augmented messages include schema instruction containing both "JSON" and "json"
+    sent_messages = call["messages"]
+    assert len(sent_messages) == 2
+    system_msg = sent_messages[-1]
+    assert system_msg["role"] == "system"
+    assert "JSON" in system_msg["content"]
+    assert "json" in system_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_openai_backend_json_object_mode_instruction_caching() -> None:
+    from src.llm.backends.openai import OpenAIBackend
+
+    OpenAIBackend._json_object_instruction.cache_clear()
+    info_before = OpenAIBackend._json_object_instruction.cache_info()
+    assert info_before.hits == 0
+
+    inst1 = OpenAIBackend._json_object_instruction(SimpleSchema)
+    info_1 = OpenAIBackend._json_object_instruction.cache_info()
+    assert info_1.hits == 0
+    assert info_1.misses == 1
+
+    inst2 = OpenAIBackend._json_object_instruction(SimpleSchema)
+    info_2 = OpenAIBackend._json_object_instruction.cache_info()
+    assert info_2.hits == 1
+    assert inst1 == inst2
+
+
+@pytest.mark.asyncio
+async def test_openai_backend_json_object_mode_empty_or_null_fallback(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    from src.utils.representation import PromptRepresentation
+
+    client = Mock()
+    client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(
+                        content="",
+                        tool_calls=[],
+                        reasoning_details=[],
+                    ),
+                )
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=10,
+                completion_tokens=0,
+                prompt_tokens_details=None,
+            ),
+        )
+    )
+
+    backend = OpenAIBackend(client)
+    with caplog.at_level(logging.WARNING):
+        result = await backend.complete(
+            model="cb-gemini-flash-high",
+            messages=[{"role": "user", "content": "Extract"}],
+            max_tokens=100,
+            response_format=PromptRepresentation,
+            extra_params={"structured_output_mode": "json_object"},
+        )
+
+    assert isinstance(result.content, PromptRepresentation)
+    assert result.content.explicit == []
+    assert any("Empty response content" in record.message for record in caplog.records)
+    assert not any("❌ Repair failed" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_openai_backend_json_object_mode_prose_or_malformed_fallback(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    from src.utils.representation import PromptRepresentation
+
+    client = Mock()
+    client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(
+                        content="Here is some unstructured conversational prose text.",
+                        tool_calls=[],
+                        reasoning_details=[],
+                    ),
+                )
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=10,
+                completion_tokens=5,
+                prompt_tokens_details=None,
+            ),
+        )
+    )
+
+    backend = OpenAIBackend(client)
+    with caplog.at_level(logging.WARNING):
+        result = await backend.complete(
+            model="cb-gemini-flash-high",
+            messages=[{"role": "user", "content": "Extract"}],
+            max_tokens=100,
+            response_format=PromptRepresentation,
+            extra_params={"structured_output_mode": "json_object"},
+        )
+
+    # Empty structured model fallback is returned on prose/unparseable content without calling repair_response_model_json
+    assert isinstance(result.content, PromptRepresentation)
+    assert result.content.explicit == []
+    assert any("Failed to parse structured output JSON" in record.message for record in caplog.records)
+    assert not any("❌ Repair failed" in record.message for record in caplog.records)
+
+

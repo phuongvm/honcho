@@ -3,6 +3,8 @@
 import base64
 import json
 import time
+from collections.abc import Mapping
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -13,10 +15,10 @@ from src.llm.nous_auth import NousAuthProvider
 
 
 def make_jwt(*, ttl: int = 900, scope: str = "inference:invoke") -> str:
-    header = {"alg": "none", "typ": "JWT"}
-    payload = {"exp": int(time.time()) + ttl, "scope": scope}
+    header: dict[str, Any] = {"alg": "none", "typ": "JWT"}
+    payload: dict[str, Any] = {"exp": int(time.time()) + ttl, "scope": scope}
 
-    def encode(part: dict[str, object]) -> str:
+    def encode(part: Mapping[str, Any]) -> str:
         raw = json.dumps(part, separators=(",", ":")).encode()
         return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
@@ -24,9 +26,10 @@ def make_jwt(*, ttl: int = 900, scope: str = "inference:invoke") -> str:
 
 
 @pytest.mark.asyncio
-async def test_nous_backend_auto_refresh_on_401() -> None:
-    """OpenAIBackend should use NousAuthProvider on 401 and retry once."""
-    # Arrange
+async def test_nous_backend_auto_refresh_on_401_json_object_mode() -> None:
+    """Nous auth refresh is preserved in json_object structured_output_mode."""
+    from src.utils.representation import PromptRepresentation
+
     mock_client = Mock()
     mock_client.api_key = "old_key"
 
@@ -34,25 +37,24 @@ async def test_nous_backend_auto_refresh_on_401() -> None:
     mock_success_response.choices = [
         Mock(
             message=Mock(
-                content="Hello, world!",
-                tool_calls=[],  # required by _normalize_response
+                content='{"explicit": [{"content": "Fact 1"}]}',
+                tool_calls=[],
                 refusal=None,
                 parsed=None,
             )
         )
     ]
-    mock_success_response.usage = Mock(completion_tokens=5)
+    mock_success_response.usage = Mock(completion_tokens=15)
 
-    # First call raises AuthError, second returns success
     mock_client.chat.completions.create = AsyncMock(
         side_effect=[
-        AuthenticationError(
-            message="401 Unauthorized",
-            response=Mock(status_code=401, request=Mock()),
-            body={"error": "invalid_api_key"},
-        ),
-        mock_success_response,
-    ]
+            AuthenticationError(
+                message="401 Unauthorized",
+                response=Mock(status_code=401, request=Mock()),
+                body={"error": "invalid_api_key"},
+            ),
+            mock_success_response,
+        ]
     )
 
     provider = Mock()
@@ -60,23 +62,19 @@ async def test_nous_backend_auto_refresh_on_401() -> None:
 
     backend = OpenAIBackend(mock_client, is_nous=True, nous_auth=provider)
 
-    # The retired legacy refresh module must not be used.
-    with patch(
-        "src.llm.nous_refresh.refresh_nous_credentials",
-        new=AsyncMock(side_effect=AssertionError("legacy refresh called")),
-    ):
-        result = await backend.complete(
-            model="nous-model",
-            messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=10,
-        )
+    result = await backend.complete(
+        model="nous-model",
+        messages=[{"role": "user", "content": "Extract"}],
+        max_tokens=100,
+        response_format=PromptRepresentation,
+        extra_params={"structured_output_mode": "json_object"},
+    )
 
-    # Assert: client api_key updated
     assert mock_client.api_key == "new_refreshed_key"
-    # Assert: create called twice (original + retry)
     assert mock_client.chat.completions.create.call_count == 2
-    # Assert: result content from the second response
-    assert result.content == "Hello, world!"
+    assert isinstance(result.content, PromptRepresentation)
+    assert len(result.content.explicit) == 1
+    assert result.content.explicit[0].content == "Fact 1"
 
 
 @pytest.mark.asyncio
@@ -144,7 +142,7 @@ async def test_nous_backend_stream_auto_refresh() -> None:
 
     class FakeAsyncIterator:
         """Simple async iterator yielding predetermined chunks."""
-        def __init__(self, chunks: list):
+        def __init__(self, chunks: list[Any]):
             self.chunks = chunks
             self.idx = 0
 

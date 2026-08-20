@@ -210,6 +210,7 @@ async def honcho_llm_call(
             plan.model,
             name=track_name,
             is_fallback=is_fallback,
+            structured_output_mode=plan.selected_config.structured_output_mode,
         )
         return plan
 
@@ -305,7 +306,7 @@ async def honcho_llm_call(
             ):
                 force_fallback.set(True)
                 logger.warning(
-                    f"Fast fallback triggered: will use fallback model "
+                    "Fast fallback triggered: will use fallback model "
                     + f"{runtime_model_config.fallback.transport}/{runtime_model_config.fallback.model} "
                     + f"on attempt {next_attempt}/{retry_attempts}"
                 )

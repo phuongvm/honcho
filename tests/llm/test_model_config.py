@@ -14,6 +14,7 @@ from src.config import (
     EmbeddingSettings,
     ModelConfig,
     ModelOverrideSettings,
+    ModelTransport,
     SummarySettings,
     VectorStoreSettings,
     load_toml_config,
@@ -515,3 +516,156 @@ def test_dialectic_level_transport_override_drops_default_thinking_params(
     assert minimal_mc["model"] == "gpt-4.1-mini"
     assert "thinking_budget_tokens" not in minimal_mc
     assert "thinking_effort" not in minimal_mc
+
+
+def test_structured_output_mode_validation_openai_backed() -> None:
+    valid_transports: list[ModelTransport] = ["openai", "ai-router", "nous", "lmstudio"]
+    for transport in valid_transports:
+        config = ConfiguredModelSettings(
+            model="cb-gemini-flash-high",
+            transport=transport,
+            structured_output_mode="json_object",
+        )
+        assert config.structured_output_mode == "json_object"
+        resolved = resolve_model_config(config)
+        assert resolved.structured_output_mode == "json_object"
+
+
+def test_structured_output_mode_rejection_native_transports() -> None:
+    invalid_transports: list[ModelTransport] = ["anthropic", "gemini"]
+    for transport in invalid_transports:
+        with pytest.raises(ValueError, match="structured_output_mode is only supported on OpenAI-backed transports"):
+            ConfiguredModelSettings(
+                model="some-model",
+                transport=transport,
+                structured_output_mode="json_object",
+            )
+
+
+def test_structured_output_mode_fallback_inheritance_and_override() -> None:
+    from src.config import FallbackModelSettings
+
+    # (a) Fallback inherits json_object when field is UNSET
+    primary = ConfiguredModelSettings(
+        model="cb-gemini-flash-high",
+        transport="ai-router",
+        structured_output_mode="json_object",
+        fallback=FallbackModelSettings(
+            model="gpt-4.1-mini",
+            transport="openai",
+        ),
+    )
+    resolved = resolve_model_config(primary)
+    assert resolved.structured_output_mode == "json_object"
+    assert resolved.fallback is not None
+    assert resolved.fallback.structured_output_mode == "json_object"
+
+    # (b) Fallback overrides to json_schema when explicitly set
+    primary_override = ConfiguredModelSettings(
+        model="cb-gemini-flash-high",
+        transport="ai-router",
+        structured_output_mode="json_object",
+        fallback=FallbackModelSettings(
+            model="gpt-4.1-mini",
+            transport="openai",
+            structured_output_mode="json_schema",
+        ),
+    )
+    resolved_override = resolve_model_config(primary_override)
+    assert resolved_override.structured_output_mode == "json_object"
+    assert resolved_override.fallback is not None
+    assert resolved_override.fallback.structured_output_mode == "json_schema"
+
+    # (c) Fallback explicitly cleared to None reverts to None
+    primary_clear = ConfiguredModelSettings(
+        model="cb-gemini-flash-high",
+        transport="ai-router",
+        structured_output_mode="json_object",
+        fallback=FallbackModelSettings(
+            model="gpt-4.1-mini",
+            transport="openai",
+            structured_output_mode=None,
+        ),
+    )
+    resolved_clear = resolve_model_config(primary_clear)
+    assert resolved_clear.structured_output_mode == "json_object"
+    assert resolved_clear.fallback is not None
+    assert resolved_clear.fallback.structured_output_mode is None
+
+    # (d) Fallback with empty string structured_output_mode normalizes to None
+    fallback_empty_str = FallbackModelSettings.model_validate(
+        {"model": "gpt-4.1-mini", "transport": "openai", "structured_output_mode": ""}
+    )
+    assert fallback_empty_str.structured_output_mode is None
+
+    # (e) Cross-provider fallback to native transport (Anthropic/Gemini) does not inherit incompatible mode
+    primary_cross = ConfiguredModelSettings(
+        model="cb-gemini-flash-high",
+        transport="ai-router",
+        structured_output_mode="json_object",
+        fallback=FallbackModelSettings(
+            model="claude-3-5-sonnet",
+            transport="anthropic",
+        ),
+    )
+    resolved_cross = resolve_model_config(primary_cross)
+    assert resolved_cross.structured_output_mode == "json_object"
+    assert resolved_cross.fallback is not None
+    assert resolved_cross.fallback.structured_output_mode is None
+
+
+def test_deriver_settings_env_empty_string_fallback_structured_output_mode_clears_to_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.config import AppSettings
+
+    monkeypatch.setenv("DERIVER_MODEL_CONFIG__TRANSPORT", "ai-router")
+    monkeypatch.setenv("DERIVER_MODEL_CONFIG__STRUCTURED_OUTPUT_MODE", "json_object")
+    monkeypatch.setenv("DERIVER_MODEL_CONFIG__FALLBACK__MODEL", "gpt-4.1-mini")
+    monkeypatch.setenv("DERIVER_MODEL_CONFIG__FALLBACK__TRANSPORT", "openai")
+    monkeypatch.setenv("DERIVER_MODEL_CONFIG__FALLBACK__STRUCTURED_OUTPUT_MODE", "")
+
+    app_settings = AppSettings()
+    deriver_model_config = resolve_model_config(app_settings.DERIVER.MODEL_CONFIG)
+    assert deriver_model_config.structured_output_mode == "json_object"
+    assert deriver_model_config.fallback is not None
+    assert deriver_model_config.fallback.structured_output_mode is None
+
+
+
+@pytest.mark.asyncio
+async def test_honcho_llm_call_passes_structured_output_mode_to_langfuse() -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from src.llm.api import honcho_llm_call
+    from src.llm.backend import CompletionResult
+
+    config = ConfiguredModelSettings(
+        model="cb-gemini-flash-high",
+        transport="ai-router",
+        structured_output_mode="json_object",
+    )
+
+    mock_backend = AsyncMock()
+    mock_backend.complete.return_value = CompletionResult(content="ok")
+
+    with (
+        patch("src.llm.runtime.client_for_model_config", return_value=AsyncMock()),
+        patch("src.llm.executor.backend_for_provider", return_value=mock_backend),
+        patch("src.llm.api.update_current_langfuse_observation") as mock_langfuse_obs,
+    ):
+        await honcho_llm_call(
+            model_config=config,
+            prompt="test prompt",
+            max_tokens=100,
+            track_name="test-deriver-run",
+        )
+
+        mock_langfuse_obs.assert_called_once_with(
+            "ai-router",
+            "cb-gemini-flash-high",
+            name="test-deriver-run",
+            is_fallback=False,
+            structured_output_mode="json_object",
+        )
+

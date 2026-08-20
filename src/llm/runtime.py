@@ -44,6 +44,7 @@ def update_current_langfuse_observation(
     *,
     name: str | None = None,
     is_fallback: bool = False,
+    structured_output_mode: str | None = None,
 ) -> None:
     """Best-effort annotation of the current Langfuse span with LLM routing."""
     if not settings.LANGFUSE_PUBLIC_KEY:
@@ -52,11 +53,14 @@ def update_current_langfuse_observation(
     try:
         from langfuse import get_client
 
-        metadata = {
+        metadata: dict[str, Any] = {
             "namespace": settings.NAMESPACE,
             "provider": provider,
             "is_fallback": is_fallback,
         }
+        if structured_output_mode is not None:
+            metadata["structured_output_mode"] = structured_output_mode
+
         gen_kwargs: dict[str, Any] = {"model": model, "metadata": metadata}
         if name is not None:
             gen_kwargs["name"] = name
@@ -135,6 +139,7 @@ def select_model_config_for_attempt(
         max_output_tokens=fb.max_output_tokens,
         stop_sequences=fb.stop_sequences,
         cache_policy=fb.cache_policy,
+        structured_output_mode=fb.structured_output_mode,
     )
 
 
@@ -172,7 +177,7 @@ def plan_attempt(
 
     if not is_primary and runtime_model_config.fallback is not None:
         logger.warning(
-            f"LLM fallback activated: switching from "
+            "LLM fallback activated: switching from "
             + f"{runtime_model_config.transport}/{runtime_model_config.model} to "
             + f"{provider}/{selected.model} on attempt {attempt}/{retry_attempts}"
         )

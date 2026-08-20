@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
+from functools import lru_cache
 from typing import Any, cast
 
 from openai import AuthenticationError, BadRequestError, LengthFinishReasonError
@@ -117,7 +118,7 @@ class OpenAIBackend:
     ) -> None:
         self._client: Any = client
         self._is_nous: bool = is_nous
-        self._nous_auth = nous_auth  # NousAuthProvider for proactive key refresh
+        self._nous_auth: Any | None = nous_auth  # NousAuthProvider for proactive key refresh
 
     async def _ensure_nous_key(self) -> None:
         """If NousAuthProvider is configured, update client API key proactively."""
@@ -194,6 +195,34 @@ class OpenAIBackend:
         )
 
         if isinstance(response_format, type):
+            structured_mode = extra_params.get("structured_output_mode") if extra_params else None
+            if structured_mode == "json_object":
+                augmented_messages = list(messages)
+                instruction = self._json_object_instruction(response_format)
+                augmented_messages.append({"role": "system", "content": instruction})
+                params["messages"] = augmented_messages
+                params["response_format"] = {"type": "json_object"}
+                try:
+                    response = await self._client.chat.completions.create(**params)
+                except AuthenticationError as exc:
+                    if self._is_nous:
+                        logger.warning("Nous API 401 detected — forcing auth.json refresh...")
+                        await self._refresh_nous_key_for_retry(exc)
+                        logger.info("Retrying request with refreshed Nous API key")
+                        response = await self._client.chat.completions.create(**params)
+                    else:
+                        raise
+                content = self._parse_or_repair_structured_content(
+                    response,
+                    response_format,
+                    model,
+                    empty_on_missing=True,
+                )
+                return self._normalize_response(
+                    response,
+                    content_override=content,
+                )
+
             params["response_format"] = response_format
             try:
                 response = await self._client.chat.completions.parse(**params)
@@ -465,17 +494,47 @@ class OpenAIBackend:
         return await self._client.chat.completions.create(**structured_params)
 
     @staticmethod
+    @lru_cache(maxsize=128)
+    def _json_object_instruction(response_format: type[BaseModel]) -> str:
+        schema = json.dumps(response_format.model_json_schema())
+        return (
+            f"The output must be formatted as a JSON object adhering to this schema:\n{schema}\n"
+            "Ensure the response is valid json."
+        )
+
+    @staticmethod
     def _parse_or_repair_structured_content(
         response: Any,
         response_format: type[BaseModel],
         model: str,
+        empty_on_missing: bool = False,
     ) -> BaseModel | str:
         raw_content = response.choices[0].message.content or ""
         if raw_content:
+            if empty_on_missing:
+                # In json_object mode (empty_on_missing=True), validate valid JSON directly;
+                # on malformed/prose content, gracefully return empty structured output with WARNING
+                # without entering the noisy repair path that logs ERROR "❌ Repair failed".
+                try:
+                    return response_format.model_validate_json(raw_content)
+                except Exception:
+                    logger.warning(
+                        "Failed to parse structured output JSON; falling back to empty structured result"
+                    )
+                    from src.llm.structured_output import empty_structured_output
+
+                    return empty_structured_output(response_format)
             return repair_response_model_json(raw_content, response_format, model)
         refusal = getattr(response.choices[0].message, "refusal", None)
         if refusal:
             return refusal
+        if empty_on_missing:
+            logger.warning(
+                "Empty response content received for structured output; falling back to empty result"
+            )
+            from src.llm.structured_output import empty_structured_output
+
+            return empty_structured_output(response_format)
         raise ValidationException(
             "No raw content available for structured output repair"
         )

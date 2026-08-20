@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 ModelTransport = Literal["anthropic", "openai", "gemini", "lmstudio", "nous", "ai-router"]
 EmbeddingTransport = Literal["openai", "gemini"]
 
+StructuredOutputMode = Literal["json_schema", "json_object"]
+OPENAI_BACKEND_TRANSPORTS = frozenset({"openai", "ai-router", "nous", "lmstudio"})
+
 
 def _default_embedding_model_for_transport(transport: EmbeddingTransport) -> str:
     if transport == "gemini":
@@ -80,7 +83,8 @@ class PromptCachePolicy(BaseModel):
 
 
 def _normalize_model_transport(data: Any) -> Any:
-    """Normalize 'provider/model' shorthand into separate transport + model fields."""
+    """Normalize 'provider/model' shorthand into separate transport + model fields,
+    and empty string structured_output_mode into None."""
     if not isinstance(data, dict):
         return data
     raw_data = cast(dict[Any, Any], data)
@@ -92,6 +96,8 @@ def _normalize_model_transport(data: Any) -> Any:
         if prefix in {"anthropic", "openai", "gemini"}:
             update["transport"] = prefix
             update["model"] = bare_model
+    if update.get("structured_output_mode") == "":
+        update["structured_output_mode"] = None
     return update
 
 
@@ -109,6 +115,17 @@ def _validate_thinking_constraints(
         and 0 < thinking_budget_tokens < 1024
     ):
         raise ValueError("thinking_budget_tokens must be >= 1024 for Anthropic models")
+
+
+def _validate_structured_output_mode(
+    transport: ModelTransport, structured_output_mode: StructuredOutputMode | None
+) -> None:
+    if structured_output_mode is None:
+        return
+    if transport not in OPENAI_BACKEND_TRANSPORTS:
+        raise ValueError(
+            f"structured_output_mode is only supported on OpenAI-backed transports {sorted(OPENAI_BACKEND_TRANSPORTS)}, got {transport}"
+        )
 
 
 class FallbackModelSettings(BaseModel):
@@ -134,6 +151,7 @@ class FallbackModelSettings(BaseModel):
     stop_sequences: list[str] | None = None
 
     cache_policy: PromptCachePolicy | None = None
+    structured_output_mode: StructuredOutputMode | Literal["UNSET"] | None = "UNSET"
 
     overrides: ModelOverrideSettings = Field(default_factory=ModelOverrideSettings)
 
@@ -149,6 +167,8 @@ class FallbackModelSettings(BaseModel):
     @model_validator(mode="after")
     def _validate_runtime_shape(self) -> "FallbackModelSettings":
         _validate_thinking_constraints(self.transport, self.thinking_budget_tokens)
+        if self.structured_output_mode != "UNSET":
+            _validate_structured_output_mode(self.transport, self.structured_output_mode)
         return self
 
 
@@ -177,6 +197,7 @@ class ConfiguredModelSettings(BaseModel):
     stop_sequences: list[str] | None = None
 
     cache_policy: PromptCachePolicy | None = None
+    structured_output_mode: StructuredOutputMode | None = None
 
     overrides: ModelOverrideSettings = Field(default_factory=ModelOverrideSettings)
 
@@ -193,6 +214,7 @@ class ConfiguredModelSettings(BaseModel):
     @model_validator(mode="after")
     def _validate_runtime_shape(self) -> "ConfiguredModelSettings":
         _validate_thinking_constraints(self.transport, self.thinking_budget_tokens)
+        _validate_structured_output_mode(self.transport, self.structured_output_mode)
         return self
 
 
@@ -223,6 +245,7 @@ class ResolvedFallbackConfig(BaseModel):
     stop_sequences: list[str] | None = None
 
     cache_policy: PromptCachePolicy | None = None
+    structured_output_mode: StructuredOutputMode | None = None
 
     @property
     def reasoning_effort(self) -> ThinkingEffortLevel | None:
@@ -258,6 +281,7 @@ class ModelConfig(BaseModel):
     stop_sequences: list[str] | None = None
 
     cache_policy: PromptCachePolicy | None = None
+    structured_output_mode: StructuredOutputMode | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -369,8 +393,18 @@ def _resolve_secret(value: str | None, env_name: str | None) -> str | None:
 
 def _resolve_fallback_config(
     fallback: FallbackModelSettings,
+    primary_structured_output_mode: StructuredOutputMode | None = None,
 ) -> ResolvedFallbackConfig:
     """Resolve a FallbackModelSettings into a runtime ResolvedFallbackConfig."""
+    if fallback.structured_output_mode == "UNSET":
+        resolved_structured_output_mode = (
+            primary_structured_output_mode
+            if fallback.transport in OPENAI_BACKEND_TRANSPORTS
+            else None
+        )
+    else:
+        resolved_structured_output_mode = fallback.structured_output_mode
+
     return ResolvedFallbackConfig(
         model=fallback.model,
         transport=fallback.transport,
@@ -391,6 +425,7 @@ def _resolve_fallback_config(
         max_output_tokens=fallback.max_output_tokens,
         stop_sequences=fallback.stop_sequences,
         cache_policy=fallback.cache_policy,
+        structured_output_mode=resolved_structured_output_mode,
     )
 
 
@@ -398,7 +433,7 @@ def resolve_model_config(configured: ConfiguredModelSettings) -> ModelConfig:
     """Resolve persisted model settings into the runtime ModelConfig."""
 
     resolved_fallback = (
-        _resolve_fallback_config(configured.fallback)
+        _resolve_fallback_config(configured.fallback, configured.structured_output_mode)
         if configured.fallback is not None
         else None
     )
@@ -424,6 +459,7 @@ def resolve_model_config(configured: ConfiguredModelSettings) -> ModelConfig:
         max_output_tokens=configured.max_output_tokens,
         stop_sequences=configured.stop_sequences,
         cache_policy=configured.cache_policy,
+        structured_output_mode=configured.structured_output_mode,
     )
 
 

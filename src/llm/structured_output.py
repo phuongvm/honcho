@@ -95,7 +95,10 @@ def attempt_structured_output_repair(
 def empty_structured_output(response_model: type[BaseModel]) -> BaseModel:
     if response_model is PromptRepresentation:
         return PromptRepresentation(explicit=[])
-    return response_model.model_validate({})
+    try:
+        return response_model.model_validate({})
+    except ValidationError:
+        return response_model.model_construct()
 
 
 async def execute_structured_output_call(
