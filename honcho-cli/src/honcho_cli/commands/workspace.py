@@ -1,10 +1,12 @@
-"""Workspace commands: list, inspect, create, delete, search, queue-status."""
+"""Workspace commands: list, inspect, create, delete, search, chat, queue-status."""
 
 from __future__ import annotations
 
 import json
+from typing import Optional
 
 import typer
+
 from honcho import (
     APIError,
     AuthenticationError,
@@ -14,17 +16,15 @@ from honcho import (
     ServerError,
 )
 
-from honcho_cli._help import HonchoTyperGroup
-from honcho_cli.common import (
-    add_common_options,
-    get_client,
-    get_resolved_config,
-    handle_cmd_flags,
-)
+from honcho_cli.config import identity_headers
 from honcho_cli.output import print_error, print_result, status, use_json
+from honcho_cli.recall import parse_csv_repeatable, reject_incompatible_recall, scope_for_sdk
 from honcho_cli.validation import validate_resource_id
 
-app = typer.Typer(cls=HonchoTyperGroup, help="List, create, inspect, delete, and search workspaces.")
+from honcho_cli._help import HonchoTyperGroup
+from honcho_cli.common import add_common_options, format_evidence, get_client, get_flag_overrides, get_resolved_config, handle_cmd_flags
+
+app = typer.Typer(cls=HonchoTyperGroup, help="List, create, inspect, chat, delete, and search workspaces.")
 add_common_options(app)
 
 
@@ -69,7 +69,7 @@ def list_workspaces(
 @app.command("create")
 def create_workspace(
     workspace_id: str = typer.Argument(help="Workspace ID to create or get"),
-    metadata: str | None = typer.Option(None, "--metadata", help="JSON metadata to associate with the workspace"),
+    metadata: Optional[str] = typer.Option(None, "--metadata", help="JSON metadata to associate with the workspace"),
     json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
 ) -> None:
     """Create or get a workspace."""
@@ -84,7 +84,7 @@ def create_workspace(
             parsed_metadata = json.loads(metadata)
         except json.JSONDecodeError as e:
             print_error("INVALID_JSON", f"--metadata must be valid JSON: {e}", {})
-            raise typer.Exit(1) from e
+            raise typer.Exit(1)
 
     try:
         # Trigger get-or-create via the workspace ensure mechanism
@@ -100,8 +100,8 @@ def create_workspace(
 
 @app.command()
 def inspect(
-    workspace_id: str | None = typer.Argument(None, help="Workspace ID (uses default if omitted)"),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
+    workspace_id: Optional[str] = typer.Argument(None, help="Workspace ID (uses default if omitted)"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
     json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
 ) -> None:
     """Inspect a workspace: peers, sessions, config."""
@@ -214,9 +214,71 @@ def delete(
 
 
 @app.command()
+def chat(
+    query: str = typer.Argument(help="Question to ask about the workspace"),
+    reasoning: Optional[str] = typer.Option(None, "--reasoning", "-r", help="Reasoning level: minimal, low, medium, high, max"),
+    scope: Optional[list[str]] = typer.Option(
+        None,
+        "--scope",
+        help="Recall only from this scope. Repeat or comma-separate for several (explicit conclusions only). Excludes -s.",
+    ),
+    evidence: bool = typer.Option(
+        False,
+        "--evidence",
+        help="Also report what the answer was built from: the conclusions and messages read and the tools called.",
+    ),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
+    session: Optional[str] = typer.Option(None, "--session", "-s", help="Override session ID"),
+    json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
+) -> None:
+    """Query the dialectic across all peers in the workspace."""
+
+    _REASONING_LEVELS = ("minimal", "low", "medium", "high", "max")
+    if reasoning and reasoning not in _REASONING_LEVELS:
+        print_error("INVALID_REASONING", f"--reasoning must be one of: {', '.join(_REASONING_LEVELS)}")
+        raise typer.Exit(1)
+
+    handle_cmd_flags(json_output=json_output, workspace=workspace, session=session)
+    wid = _get_workspace_id(None)
+    client, config = get_client()
+    scope_names = parse_csv_repeatable(scope, kind="scope", flag="--scope")
+    session_id = config.session_id or None
+    reject_incompatible_recall(
+        session_id=session_id,
+        scope=scope_names,
+        session_from_env=not get_flag_overrides()["session"],
+    )
+
+    chat_kwargs: dict[str, object] = {
+        "session": session_id,
+        "reasoning_level": reasoning or None,
+    }
+    scope_arg = scope_for_sdk(scope_names)
+    if scope_arg is not None:
+        chat_kwargs["scope"] = scope_arg
+
+    try:
+        if not evidence:
+            response = client.chat(query, **chat_kwargs)
+            print_result({"workspace_id": wid, "query": query, "response": response})
+            return
+        result = client.chat(query, include_evidence=True, **chat_kwargs)
+        print_result(
+            {
+                "workspace_id": wid,
+                "query": query,
+                "response": result.content,
+                "evidence": format_evidence(result.evidence),
+            }
+        )
+    except Exception as e:
+        _handle_chat_error(e, "workspace", wid)
+
+
+@app.command()
 def search(
     query: str = typer.Argument(help="Search query"),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
     limit: int = typer.Option(10, help="Max results"),
     json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
 ) -> None:
@@ -246,10 +308,10 @@ def search(
 
 @app.command("queue-status")
 def queue_status(
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
-    session: str | None = typer.Option(None, "--session", "-s", help="Override session ID"),
-    observer: str | None = typer.Option(None, help="Filter by observer peer"),
-    sender: str | None = typer.Option(None, help="Filter by sender peer"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
+    session: Optional[str] = typer.Option(None, "--session", "-s", help="Override session ID"),
+    observer: Optional[str] = typer.Option(None, help="Filter by observer peer"),
+    sender: Optional[str] = typer.Option(None, help="Filter by sender peer"),
     json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
 ) -> None:
     """Get queue processing status."""
@@ -261,7 +323,7 @@ def queue_status(
 
     try:
         result = client.queue_status(observer=observer, sender=sender, session=config.session_id or None)
-        print_result(result.__dict__ if hasattr(result, "__dict__") else result)
+        print_result(result.model_dump(mode="json"))
     except Exception as e:
         _handle_error(e, "queue", "status")
 
@@ -272,6 +334,7 @@ def _with_workspace(client, workspace_id: str):
         base_url=str(client.base_url),
         api_key=client._http.api_key if hasattr(client._http, "api_key") else None,
         workspace_id=workspace_id,
+        default_headers=identity_headers(),
     )
 
 
@@ -285,6 +348,21 @@ def _config_to_dict(config) -> dict:
             result[k] = _config_to_dict(v) if hasattr(v, "__dict__") and not isinstance(v, str) else v
         return result
     return config
+
+
+def _handle_chat_error(e: Exception, resource: str, resource_id: str) -> None:
+    """Like ``_handle_error``, but keep the server/SDK message.
+
+    Chat 404s include scope misses (``Scope X not found in workspace Y``). Rewriting
+    those as ``Workspace 'id' not found`` would hide the real error.
+    """
+    if isinstance(e, NotFoundError):
+        print_error("NOT_FOUND", str(e), {resource: resource_id})
+        raise typer.Exit(1)
+    if isinstance(e, ValueError):
+        print_error("INVALID_ARGUMENT", str(e), {resource: resource_id})
+        raise typer.Exit(1)
+    _handle_error(e, resource, resource_id)
 
 
 def _handle_error(e: Exception, resource: str, resource_id: str) -> None:

@@ -12,7 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import make_transient_to_detached
 
 from src import models, schemas
-from src.cache.client import cache, get_cache_namespace, safe_cache_delete
+from src.cache.client import (
+    cache,
+    cache_key_namespace,
+    cache_prefix_namespace,
+    safe_cache_delete,
+)
 from src.config import settings
 from src.crud.workspace import get_or_create_workspace
 from src.exceptions import (
@@ -22,6 +27,7 @@ from src.exceptions import (
 )
 from src.models import Peer
 from src.schemas.api import RESOURCE_NAME_PATTERN
+from src.telemetry.events import PeerCreatedEvent, emit
 from src.utils import scopes as scopes_util
 from src.utils.filter import apply_filter
 from src.utils.types import GetOrCreateResult
@@ -32,13 +38,13 @@ logger = getLogger(__name__)
 PEER_NAME_MAX_LENGTH = 512
 
 PEER_CACHE_KEY_TEMPLATE = "v2:workspace:{workspace_name}:peer:{peer_name}"
-PEER_LOCK_PREFIX = f"{get_cache_namespace()}:lock:v2"
+PEER_LOCK_PREFIX = f"{cache_prefix_namespace()}:lock:v2"
 
 
 def peer_cache_key(workspace_name: str, peer_name: str) -> str:
     """Generate cache key for peer."""
     return (
-        get_cache_namespace()
+        cache_key_namespace()
         + ":"
         + PEER_CACHE_KEY_TEMPLATE.format(
             workspace_name=workspace_name,
@@ -277,7 +283,9 @@ async def get_or_create_peers(
             reserved-prefix or non-conforming name on the create path
     """
 
-    await get_or_create_workspace(db, schemas.WorkspaceCreate(name=workspace_name))
+    ws_result = await get_or_create_workspace(
+        db, schemas.WorkspaceCreate(name=workspace_name)
+    )
     peer_names = [p.name for p in peers]
     # Before the lookup: these values cannot match a stored row and would fail
     # inside the query itself rather than as a clean 422.
@@ -375,23 +383,28 @@ async def get_or_create_peers(
         )
     ]
 
-    async def _invalidate_peer_cache():
+    new_peer_names = [p.name for p in new_peers]
+
+    async def _after_commit():
+        await ws_result.post_commit()
         for cache_key in _cache_keys_to_invalidate:
             await safe_cache_delete(cache_key)
+        for name in new_peer_names:
+            emit(PeerCreatedEvent(workspace_name=workspace_name, peer_name=name))
 
     # Return combined list of existing and new peers
     # created=True if any new peers were created
     return GetOrCreateResult(
         existing_peers + new_peers,
         created=len(new_peers) > 0,
-        on_commit=_invalidate_peer_cache if _cache_keys_to_invalidate else None,
+        on_commit=_after_commit,
     )
 
 
 @cache(
     key=PEER_CACHE_KEY_TEMPLATE,
     ttl=f"{settings.CACHE.DEFAULT_TTL_SECONDS}s",
-    prefix=get_cache_namespace(),
+    prefix=cache_prefix_namespace(),
     condition=NOT_NONE,
 )
 @cache.locked(

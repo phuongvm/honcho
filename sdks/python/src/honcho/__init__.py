@@ -37,12 +37,19 @@ Usage:
         print(p.id)
 """
 
-import re
-from importlib.metadata import PackageNotFoundError, version
-from pathlib import Path
-
-from .aio import ConclusionsViewAio, HonchoAio, PeerAio, ScopeAio, SessionAio
+from .aio import (
+    ConclusionsViewAio,
+    HonchoAio,
+    PeerAio,
+    ScopeAio,
+    SessionAio,
+    WorkspaceConclusionsAio,
+)
 from .api_types import (
+    Evidence,
+    EvidenceMessageRef,
+    EvidenceObservation,
+    EvidenceToolCall,
     MessageCreateParams,
     ScopeBackfillJob,
     ScopeResponse,
@@ -50,7 +57,8 @@ from .api_types import (
 )
 from .base import PeerBase, ScopeBase, SessionBase
 from .client import Honcho
-from .conclusions import Conclusion, ConclusionsView
+from .conclusions import Conclusion, ConclusionsView, WorkspaceConclusions
+from .http.client import __version__ as __version__
 from .http.exceptions import (
     APIError,
     AuthenticationError,
@@ -73,6 +81,7 @@ from .session import Session
 from .session_context import SessionContext, SessionSummaries, Summary
 from .types import (
     AsyncDialecticStreamResponse,
+    ChatResponse,
     DialecticStreamResponse,
 )
 
@@ -83,73 +92,64 @@ ConclusionScope = ConclusionsView
 ConclusionScopeAio = ConclusionsViewAio
 
 
-def _detect_version() -> str:
-    try:
-        return version("honcho-ai")
-    except PackageNotFoundError:
-        try:
-            pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
-            pyproject_text = pyproject_path.read_text(encoding="utf-8")
-            match = re.search(r'^version\s*=\s*"([^"]+)"', pyproject_text, re.MULTILINE)
-            if match:
-                return match.group(1)
-        except OSError:
-            pass
-        return "0.0.0"
-
-
-__version__ = _detect_version()
 __author__ = "Plastic Labs"
 __email__ = "hello@plasticlabs.ai"
 
 __all__ = [
-    # Exceptions
-    "APIError",
-    # Streaming
-    "AsyncDialecticStreamResponse",
-    # Pagination
-    "AsyncPage",
-    "AuthenticationError",
-    "BadRequestError",
-    # Domain classes
-    "Conclusion",
-    # Deprecated aliases
-    "ConclusionScope",
-    "ConclusionScopeAio",
-    "ConclusionsView",
-    # Aio views (for type hints)
-    "ConclusionsViewAio",
-    "ConflictError",
-    "ConnectionError",
-    "DialecticStreamResponse",
     # Client
     "Honcho",
-    "HonchoAio",
-    "HonchoError",
+    # Domain classes
+    "Conclusion",
+    "ConclusionsView",
+    "WorkspaceConclusions",
     "Message",
     "MessageCreateParams",
-    "NotFoundError",
     "Peer",
+    "Scope",
+    "Session",
+    # Aio views (for type hints)
+    "ConclusionsViewAio",
+    "WorkspaceConclusionsAio",
+    "HonchoAio",
     "PeerAio",
+    "ScopeAio",
+    "SessionAio",
     # Base classes
     "PeerBase",
-    "PermissionDeniedError",
-    "RateLimitError",
-    "Scope",
-    "ScopeAio",
+    "ScopeBase",
+    "SessionBase",
     # Response types
     "ScopeBackfillJob",
-    "ScopeBase",
     "ScopeResponse",
     "ScopeStatusResponse",
-    "ServerError",
-    "Session",
-    "SessionAio",
-    "SessionBase",
     "SessionContext",
     "SessionSummaries",
     "Summary",
+    # Deprecated aliases
+    "ConclusionScope",
+    "ConclusionScopeAio",
+    # Pagination
+    "AsyncPage",
     "SyncPage",
+    # Streaming
+    "AsyncDialecticStreamResponse",
+    "ChatResponse",
+    "DialecticStreamResponse",
+    "Evidence",
+    "EvidenceMessageRef",
+    "EvidenceObservation",
+    "EvidenceToolCall",
+    # Exceptions
+    "APIError",
+    "AuthenticationError",
+    "BadRequestError",
+    "ConflictError",
+    "ConnectionError",
+    "HonchoError",
+    "NotFoundError",
+    "PermissionDeniedError",
+    "RateLimitError",
+    "ServerError",
     "TimeoutError",
     "UnprocessableEntityError",
 ]

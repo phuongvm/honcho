@@ -34,6 +34,7 @@ from honcho_cli.config import (
     DEFAULT_BASE_URL,
     CLIConfig,
     OAuthTokens,
+    identity_headers,
 )
 from honcho_cli.output import print_error, print_result, set_json_mode, use_json
 
@@ -75,7 +76,8 @@ def _test_connection(base_url: str, api_key: str) -> tuple[bool, str]:
     substrings of error messages — robust to SDK message changes and locale.
     """
     try:
-        list(Honcho(base_url=base_url, api_key=api_key).workspaces())
+        client = Honcho(base_url=base_url, api_key=api_key, default_headers=identity_headers())
+        list(client.workspaces())
         return True, "OK"
     except AuthenticationError:
         return False, "Unauthorized — check your API key"
@@ -391,7 +393,12 @@ def doctor(
         try:
 
 
-            client = Honcho(base_url=config.base_url, api_key=key, workspace_id=config.workspace_id)
+            client = Honcho(
+                base_url=config.base_url,
+                api_key=key,
+                workspace_id=config.workspace_id,
+                default_headers=identity_headers(),
+            )
             client.get_configuration()
             ws_ok = True
             _add("Workspace reachable", True, config.workspace_id)

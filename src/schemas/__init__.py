@@ -15,6 +15,11 @@ from src.schemas.api import (
     DialecticResponse,
     DialecticStreamChunk,
     DialecticStreamDelta,
+    ErrorResponse,
+    Evidence,
+    EvidenceMessageRef,
+    EvidenceObservation,
+    EvidenceToolCall,
     Message,
     MessageBase,
     MessageBatchCreate,
@@ -54,12 +59,14 @@ from src.schemas.api import (
     WebhookEndpointCreate,
     Workspace,
     WorkspaceBase,
+    WorkspaceChatOptions,
     WorkspaceCreate,
     WorkspaceGet,
     WorkspaceMessageSearchOptions,
     WorkspaceUpdate,
 )
 from src.schemas.configuration import (
+    DialecticConfiguration,
     DreamConfiguration,
     DreamType,
     MessageConfiguration,
@@ -67,6 +74,7 @@ from src.schemas.configuration import (
     PeerConfig,
     ReasoningConfiguration,
     ResolvedConfiguration,
+    ResolvedDialecticConfiguration,
     ResolvedDreamConfiguration,
     ResolvedPeerCardConfiguration,
     ResolvedReasoningConfiguration,
@@ -77,6 +85,7 @@ from src.schemas.configuration import (
     WorkspaceConfiguration,
 )
 from src.schemas.internal import (
+    DeriverMetrics,
     DocumentBase,
     DocumentCreate,
     DocumentMetadata,
@@ -91,6 +100,7 @@ from src.schemas.internal import (
 
 __all__ = [
     # configuration
+    "DialecticConfiguration",
     "DreamConfiguration",
     "DreamType",
     "MessageConfiguration",
@@ -98,6 +108,7 @@ __all__ = [
     "PeerConfig",
     "ReasoningConfiguration",
     "ResolvedConfiguration",
+    "ResolvedDialecticConfiguration",
     "ResolvedDreamConfiguration",
     "ResolvedPeerCardConfiguration",
     "ResolvedReasoningConfiguration",
@@ -114,8 +125,14 @@ __all__ = [
     "ConclusionQuery",
     "DialecticOptions",
     "DialecticResponse",
+    "WorkspaceChatOptions",
     "DialecticStreamChunk",
+    "Evidence",
+    "EvidenceMessageRef",
+    "EvidenceObservation",
+    "EvidenceToolCall",
     "DialecticStreamDelta",
+    "ErrorResponse",
     "Message",
     "MessageBase",
     "MessageBatchCreate",
@@ -161,6 +178,7 @@ __all__ = [
     "WorkspaceMessageSearchOptions",
     "WorkspaceUpdate",
     # internal
+    "DeriverMetrics",
     "DocumentBase",
     "DocumentCreate",
     "DocumentMetadata",

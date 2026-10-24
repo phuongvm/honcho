@@ -16,7 +16,7 @@ documents plus dependent derived documents).
 """
 
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from logging import getLogger
 from typing import Any, Literal
 from typing import cast as py_cast
@@ -35,6 +35,7 @@ from src.exceptions import (
     ResourceNotFoundException,
     ValidationException,
 )
+from src.telemetry.events import ScopeCreatedEvent, emit
 from src.utils.scopes import (
     SCOPE_KIND,
     is_scope_peer,
@@ -126,7 +127,9 @@ async def get_or_create_scopes(
             without the scope kind flag, or if we fail to get or create the
             scope peers
     """
-    await get_or_create_workspace(db, schemas.WorkspaceCreate(name=workspace_name))
+    ws_result = await get_or_create_workspace(
+        db, schemas.WorkspaceCreate(name=workspace_name)
+    )
 
     peer_names = {scope_peer_name(s.name): s for s in scopes}
     stmt = (
@@ -193,14 +196,19 @@ async def get_or_create_scopes(
         )
     ]
 
-    async def _invalidate_peer_cache():
+    new_scope_names = [peer_names[p.name].name for p in new_peers]
+
+    async def _after_commit():
+        await ws_result.post_commit()
         for cache_key in _cache_keys_to_invalidate:
             await safe_cache_delete(cache_key)
+        for name in new_scope_names:
+            emit(ScopeCreatedEvent(workspace_name=workspace_name, scope_name=name))
 
     return GetOrCreateResult(
         existing_peers + new_peers,
         created=len(new_peers) > 0,
-        on_commit=_invalidate_peer_cache if _cache_keys_to_invalidate else None,
+        on_commit=_after_commit,
     )
 
 
@@ -317,6 +325,26 @@ async def resolve_scope_peers(
             )
         resolved.append(peer_name)
     return resolved
+
+
+async def resolve_scope_session_union(
+    db: AsyncSession,
+    workspace_name: str,
+    scope_names: Sequence[str],
+) -> list[str]:
+    """Return the union of member sessions across the given scopes."""
+    from src.crud.message import get_peer_session_names
+
+    union: list[str] = []
+    seen: set[str] = set()
+    for scope_peer in await resolve_scope_peers(db, workspace_name, scope_names):
+        for session_name in await get_peer_session_names(
+            db, workspace_name, scope_peer
+        ):
+            if session_name not in seen:
+                seen.add(session_name)
+                union.append(session_name)
+    return union
 
 
 async def get_scope_sessions(
@@ -508,7 +536,7 @@ async def update_scope_backfill_status(
     """
     entry: dict[str, Any] = {
         "state": state,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
     }
     if docs_copied is not None:
         entry["docs_copied"] = docs_copied

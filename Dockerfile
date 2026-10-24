@@ -4,7 +4,7 @@
 # https://testdriven.io/blog/docker-best-practices/
 FROM python:3.13-slim-bookworm AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:0.9.24 /uv /bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /bin/uv
 
 WORKDIR /app
 
@@ -63,6 +63,9 @@ COPY --chown=app:app migrations/ /app/migrations/
 COPY --chown=app:app scripts/ /app/scripts/
 COPY --chown=app:app docker/ /app/docker/
 COPY --chown=app:app alembic.ini /app/alembic.ini
+# src/_version.py reads the service version from here at runtime, so this
+# is a runtime input as well as a build input.
+COPY --chown=app:app pyproject.toml /app/pyproject.toml
 # Copy config files - this will copy config.toml if it exists, and config.toml.example
 COPY --chown=app:app config.toml* /app/
 

@@ -6,7 +6,17 @@ from logging import getLogger
 from typing import Any, TypeVar, get_args
 from typing import cast as typing_cast
 
-from sqlalchemy import ColumnElement, Select, and_, case, cast, literal, or_
+from sqlalchemy import (
+    ColumnElement,
+    Select,
+    and_,
+    case,
+    cast,
+    literal,
+    or_,
+    select,
+    true,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import Numeric
 
@@ -58,10 +68,14 @@ ALLOWED_EXTERNAL_TO_INTERNAL_COLUMN_MAPPING_MESSAGES = {
 }
 
 ALLOWED_EXTERNAL_TO_INTERNAL_COLUMN_MAPPING_DOCUMENTS = {
+    "id": "id",
     "session_id": "session_name",
     "workspace_id": "workspace_name",
     "observer_id": "observer",
     "observed_id": "observed",
+    "level": "level",
+    "source_ids": "source_ids",
+    "times_derived": "times_derived",
     "metadata": "internal_metadata",
 }
 
@@ -392,9 +406,7 @@ def apply_filter(
     # somewhere deep in SQLAlchemy. The exception is still logged in full so a
     # genuine bug in the builder stays visible rather than being swallowed.
     try:
-        conditions = _build_filter_conditions(filters, model_class)
-        if conditions is not None:
-            stmt = stmt.where(conditions)
+        stmt = stmt.where(_build_filter_conditions(filters, model_class))
     except FilterError:
         raise
     except Exception:
@@ -413,7 +425,7 @@ def apply_filter(
 
 def _build_filter_conditions(
     filter_dict: dict[str, Any], model_class: type[Any], *, _depth: int = 0
-) -> ColumnElement[bool] | None:
+) -> ColumnElement[bool]:
     """
     Recursively build filter conditions from a filter dictionary.
 
@@ -422,7 +434,10 @@ def _build_filter_conditions(
         model_class: SQLAlchemy model class for column access
 
     Returns:
-        SQLAlchemy condition object or None
+        SQLAlchemy condition object. A filter that constrains nothing — `{}`,
+        or only wildcards — is TRUE, never absent: a sub-filter dropped from
+        an AND is harmless, but dropped from an OR it narrows the result, and
+        dropped from a NOT it widens it to every row.
     """
     if _depth > 5:
         raise FilterError("Filter nesting exceeds maximum depth of 5")
@@ -442,8 +457,7 @@ def _build_filter_conditions(
                 model_class,
                 _depth=_depth + 1,
             )
-            if sub_condition is not None:
-                and_conditions.append(sub_condition)
+            and_conditions.append(sub_condition)
         if and_conditions:
             conditions.append(and_(*and_conditions))
 
@@ -459,8 +473,7 @@ def _build_filter_conditions(
                 model_class,
                 _depth=_depth + 1,
             )
-            if sub_condition is not None:
-                or_conditions.append(sub_condition)
+            or_conditions.append(sub_condition)
         if or_conditions:
             conditions.append(or_(*or_conditions))
 
@@ -478,17 +491,16 @@ def _build_filter_conditions(
                 model_class,
                 _depth=_depth + 1,
             )
-            if sub_condition is not None:
-                # `IS NOT TRUE` rather than `NOT`: under SQL's three-valued
-                # logic a comparison against a NULL column is NULL, and `NOT
-                # NULL` is NULL, so plain negation drops rows whose column is
-                # unset — even though an unset column does not match what is
-                # being excluded. NOT [{"session_id": "abc"}] must include
-                # documents that have no session, since those are not "abc".
-                # Composes over compound sub-conditions: (a AND b) IS NOT TRUE.
-                not_conditions.append(
-                    sub_condition.is_not(True)
-                )  # Apply NOT to each condition individually
+            # `IS NOT TRUE` rather than `NOT`: under SQL's three-valued
+            # logic a comparison against a NULL column is NULL, and `NOT
+            # NULL` is NULL, so plain negation drops rows whose column is
+            # unset — even though an unset column does not match what is
+            # being excluded. NOT [{"session_id": "abc"}] must include
+            # documents that have no session, since those are not "abc".
+            # Composes over compound sub-conditions: (a AND b) IS NOT TRUE.
+            not_conditions.append(
+                sub_condition.is_not(True)
+            )  # Apply NOT to each condition individually
         if not_conditions:
             conditions.append(and_(*not_conditions))  # Then AND them together
 
@@ -502,13 +514,80 @@ def _build_filter_conditions(
         if condition is not None:
             conditions.append(condition)
 
-    # Combine all conditions with AND
+    # Combine all conditions with AND. A field builder returning None means that
+    # field constrains nothing (a wildcard), so leaving it out of this AND is
+    # exact; only the whole dict needs to become an explicit TRUE.
     if len(conditions) == 0:
-        return None
+        return true()
     elif len(conditions) == 1:
         return conditions[0]
     else:
         return and_(*conditions)
+
+
+def _build_source_ids_condition(
+    value: Any, model_class: type[Any]
+) -> ColumnElement[bool] | None:
+    """Filter documents by reasoning-tree linkage via document_sources.
+
+    Preserves the old JSONB containment semantics: a scalar matches
+    membership, a bare list requires ALL entries present, {"contains": x}
+    matches membership, {"in": [...]} matches any entry present.
+    """
+    from ..models import DocumentSource
+
+    def _member(sid: Any) -> ColumnElement[bool]:
+        """Condition that the document is linked to source `sid`.
+
+        Raises:
+            FilterError: If `sid` is not a non-empty string.
+        """
+        if not isinstance(sid, str) or not sid:
+            raise FilterError("source_ids filter entries must be non-empty strings")
+        linked = (
+            select(literal(1))
+            .where(
+                DocumentSource.derived_id == model_class.id,
+                DocumentSource.source_id == sid,
+            )
+            .exists()
+        )
+        # Undrained rows still carry linkage in the legacy JSONB column.
+        return or_(linked, model_class.legacy_source_ids.contains([sid]))
+
+    if value == "*":
+        return None
+    if isinstance(value, str):
+        return _member(value)
+    if isinstance(value, list | tuple | set):
+        # A bare list requires ALL entries, so a wildcard entry is one more
+        # always-true term: ["a", "*"] is "linked to a", not "anything".
+        entries = [v for v in typing_cast(Sequence[Any], value) if v != "*"]
+        return _combine_conditions_with_and([_member(v) for v in entries])
+    if isinstance(value, dict):
+        conditions: list[ColumnElement[bool]] = []
+        for operator, op_value in typing_cast("dict[str, Any]", value).items():
+            if op_value == "*":
+                continue
+            if operator == "contains":
+                conditions.append(_member(op_value))
+            elif operator == "in":
+                if not isinstance(op_value, list | tuple | set):
+                    raise FilterError(
+                        f"Invalid value for 'in' operator: {op_value}. Expected an iterable"
+                    )
+                in_entries = list(typing_cast(Sequence[Any], op_value))
+                if "*" in in_entries:
+                    continue
+                members = [_member(v) for v in in_entries]
+                if members:
+                    conditions.append(or_(*members))
+            else:
+                raise FilterError(
+                    f"Operator '{operator}' is not supported on source_ids"
+                )
+        return _combine_conditions_with_and(conditions)
+    raise FilterError(f"Invalid source_ids filter value: {value}")
 
 
 def _build_field_condition(
@@ -546,6 +625,11 @@ def _build_field_condition(
         raise FilterError(
             f"Column '{key}' is not allowed to be filtered on or does not exist on {model_class.__name__}"
         )
+
+    # Reasoning-tree linkage lives in the document_sources table, not a
+    # column; translate to EXISTS subqueries before column resolution.
+    if model_class.__name__ == "Document" and column_name == "source_ids":
+        return _build_source_ids_condition(value, model_class)
 
     # Check if the column exists on the model
     if not hasattr(model_class, column_name):
@@ -689,7 +773,9 @@ def _build_comparison_condition(
                 "lte": lambda a, v: a <= v,
                 "gt": lambda a, v: a > v,
                 "lt": lambda a, v: a < v,
-                "ne": lambda a, v: a != v,
+                # IS DISTINCT FROM, not <>: (metadata ->> key) is NULL for an
+                # absent key, and `NULL <> v` is NULL, so <> drops those rows.
+                "ne": lambda a, v: a.is_distinct_from(v),
             }
             return operator_map[operator](safe_accessor, safe_value)
         except Exception as e:
@@ -925,7 +1011,7 @@ def _validate_datetime_string(value: str) -> datetime.datetime | None:
         try:
             parsed = datetime.datetime.strptime(value, fmt)
             # Assume UTC timezone for naive datetimes
-            return parsed.replace(tzinfo=datetime.timezone.utc)
+            return parsed.replace(tzinfo=datetime.UTC)
         except ValueError:
             continue
 

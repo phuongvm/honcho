@@ -1,7 +1,6 @@
 """
-Custom utility logging functions for Langfuse integration.
-This module provides specialized formatters for all @observe decorated functions
-and a conditional observe decorator that only applies when Langfuse is configured.
+Custom utility logging functions: Rich console formatters, metric accumulation,
+and the Langfuse shutdown flush.
 """
 
 import datetime
@@ -31,6 +30,9 @@ console = Console(markup=True)
 
 COLLECT_METRICS_LOCAL = settings.COLLECT_METRICS_LOCAL
 
+
+# HONCHO-INV-5 (fork): inline Langfuse instrumentation is the fork default
+# (LANGFUSE_EXPORTER_MODE="inline"); upstream removed it in #1253.
 P = ParamSpec("P")
 R = TypeVar("R")
 

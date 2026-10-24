@@ -1,2 +1,7 @@
-.wrangler
 node_modules
+.wrangler
+.dev.vars
+.env
+.env.*
+*.log
+dist

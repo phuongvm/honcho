@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import json
+from typing import Optional
 
 import typer
+
 from honcho.api_types import PeerConfig
 
-from honcho_cli._help import HonchoTyperGroup
-from honcho_cli.commands.workspace import _config_to_dict, _handle_error, _raw_list
-from honcho_cli.common import (
-    add_common_options,
-    get_client,
-    get_resolved_config,
-    handle_cmd_flags,
-)
+from honcho_cli.commands.workspace import _config_to_dict, _handle_chat_error, _handle_error, _raw_list
 from honcho_cli.output import print_error, print_result, use_json
+from honcho_cli.recall import parse_csv_repeatable, reject_incompatible_recall, scope_for_sdk
 from honcho_cli.validation import validate_resource_id
+
+from honcho_cli._help import HonchoTyperGroup
+from honcho_cli.common import add_common_options, format_evidence, get_client, get_flag_overrides, get_resolved_config, handle_cmd_flags
 
 app = typer.Typer(cls=HonchoTyperGroup, help="List, create, chat with, search, and manage peers and their representations.")
 add_common_options(app)
@@ -40,7 +39,7 @@ def _get_peer_id(peer_id: str | None) -> str:
 
 @app.command("list")
 def list_peers(
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
     json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
 ) -> None:
     """List all peers in the workspace."""
@@ -65,9 +64,9 @@ def list_peers(
 
 @app.command()
 def inspect(
-    peer_id: str | None = typer.Argument(None, help="Peer ID (uses default if omitted)"),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
-    peer: str | None = typer.Option(None, "--peer", "-p", help="Override peer ID"),
+    peer_id: Optional[str] = typer.Argument(None, help="Peer ID (uses default if omitted)"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
+    peer: Optional[str] = typer.Option(None, "--peer", "-p", help="Override peer ID"),
     json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
 ) -> None:
     """Inspect a peer: card, session count, recent conclusions."""
@@ -107,10 +106,10 @@ def inspect(
 
 @app.command()
 def card(
-    peer_id: str | None = typer.Argument(None, help="Peer ID (uses default if omitted)"),
-    target: str | None = typer.Option(None, help="Target peer for relationship card"),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
-    peer: str | None = typer.Option(None, "--peer", "-p", help="Override peer ID"),
+    peer_id: Optional[str] = typer.Argument(None, help="Peer ID (uses default if omitted)"),
+    target: Optional[str] = typer.Option(None, help="Target peer for relationship card"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
+    peer: Optional[str] = typer.Option(None, "--peer", "-p", help="Override peer ID"),
     json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
 ) -> None:
     """Get raw peer card content."""
@@ -130,44 +129,84 @@ def card(
 @app.command()
 def chat(
     query: str = typer.Argument(help="Question to ask about the peer"),
-    target: str | None = typer.Option(None, help="Target peer for perspective"),
-    reasoning: str | None = typer.Option(None, "--reasoning", "-r", help="Reasoning level: minimal, low, medium, high, max"),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
-    peer: str | None = typer.Option(None, "--peer", "-p", help="Override peer ID"),
-    session: str | None = typer.Option(None, "--session", "-s", help="Override session ID"),
+    target: Optional[str] = typer.Option(None, help="Target peer for perspective"),
+    reasoning: Optional[str] = typer.Option(None, "--reasoning", "-r", help="Reasoning level: minimal, low, medium, high, max"),
+    scope: Optional[list[str]] = typer.Option(
+        None,
+        "--scope",
+        help="Recall only from this scope. Repeat or comma-separate for several (explicit conclusions only). Excludes -s and --sessions.",
+    ),
+    sessions: Optional[list[str]] = typer.Option(
+        None,
+        "--sessions",
+        help="Recall only from these session IDs (repeat or comma-separate); explicit conclusions only. Excludes -s and --scope.",
+    ),
+    evidence: bool = typer.Option(
+        False,
+        "--evidence",
+        help="Also report what the answer was built from: the conclusions and messages read and the tools called.",
+    ),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
+    peer: Optional[str] = typer.Option(None, "--peer", "-p", help="Override peer ID"),
+    session: Optional[str] = typer.Option(None, "--session", "-s", help="Override session ID"),
     json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
 ) -> None:
     """Query the dialectic about a peer."""
 
     _REASONING_LEVELS = ("minimal", "low", "medium", "high", "max")
     if reasoning and reasoning not in _REASONING_LEVELS:
-        from honcho_cli.output import print_error
         print_error("INVALID_REASONING", f"--reasoning must be one of: {', '.join(_REASONING_LEVELS)}")
         raise typer.Exit(1)
 
     handle_cmd_flags(json_output=json_output, workspace=workspace, peer=peer, session=session)
     pid = _get_peer_id(None)
     client, config = get_client()
-    p = client.peer(pid)
+    scope_names = parse_csv_repeatable(scope, kind="scope", flag="--scope")
+    session_allowlist = parse_csv_repeatable(sessions, kind="session", flag="--sessions")
+    session_id = config.session_id or None
+    reject_incompatible_recall(
+        session_id=session_id,
+        scope=scope_names,
+        sessions=session_allowlist,
+        session_from_env=not get_flag_overrides()["session"],
+    )
+
+    chat_kwargs: dict[str, object] = {
+        "target": target,
+        "session": session_id,
+        "reasoning_level": reasoning or None,
+    }
+    scope_arg = scope_for_sdk(scope_names)
+    if scope_arg is not None:
+        chat_kwargs["scope"] = scope_arg
+    if session_allowlist is not None:
+        chat_kwargs["sessions"] = session_allowlist
 
     try:
-        response = p.chat(
-            query,
-            target=target,
-            session=config.session_id or None,
-            reasoning_level=reasoning or None,
+        p = client.peer(pid)
+        if not evidence:
+            response = p.chat(query, **chat_kwargs)
+            print_result({"peer_id": pid, "query": query, "response": response})
+            return
+        result = p.chat(query, include_evidence=True, **chat_kwargs)
+        print_result(
+            {
+                "peer_id": pid,
+                "query": query,
+                "response": result.content,
+                "evidence": format_evidence(result.evidence),
+            }
         )
-        print_result({"peer_id": pid, "query": query, "response": response})
     except Exception as e:
-        _handle_error(e, "peer", pid)
+        _handle_chat_error(e, "peer", pid)
 
 
 @app.command()
 def search(
     query: str = typer.Argument(help="Search query"),
     limit: int = typer.Option(10, help="Max results"),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
-    peer: str | None = typer.Option(None, "--peer", "-p", help="Override peer ID"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
+    peer: Optional[str] = typer.Option(None, "--peer", "-p", help="Override peer ID"),
     json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
 ) -> None:
     """Search a peer's messages."""
@@ -196,9 +235,9 @@ def search(
 @app.command("create")
 def create_peer(
     peer_id: str = typer.Argument(help="Peer ID to create or get"),
-    observe_me: bool | None = typer.Option(None, "--observe-me/--no-observe-me", help="Whether Honcho will form a representation of this peer"),
-    metadata: str | None = typer.Option(None, "--metadata", help="JSON metadata to associate with the peer"),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
+    observe_me: Optional[bool] = typer.Option(None, "--observe-me/--no-observe-me", help="Whether Honcho will form a representation of this peer"),
+    metadata: Optional[str] = typer.Option(None, "--metadata", help="JSON metadata to associate with the peer"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
     json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
 ) -> None:
     """Create or get a peer."""
@@ -212,7 +251,7 @@ def create_peer(
             parsed_metadata = json.loads(metadata)
         except json.JSONDecodeError as e:
             print_error("INVALID_JSON", f"--metadata must be valid JSON: {e}", {})
-            raise typer.Exit(1) from e
+            raise typer.Exit(1)
 
     peer_config = PeerConfig(observe_me=observe_me) if observe_me is not None else None
 
@@ -233,9 +272,9 @@ def create_peer(
 
 @app.command("get-metadata")
 def get_metadata(
-    peer_id: str | None = typer.Argument(None, help="Peer ID (uses default if omitted)"),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
-    peer: str | None = typer.Option(None, "--peer", "-p", help="Override peer ID"),
+    peer_id: Optional[str] = typer.Argument(None, help="Peer ID (uses default if omitted)"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
+    peer: Optional[str] = typer.Option(None, "--peer", "-p", help="Override peer ID"),
     json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
 ) -> None:
     """Get metadata for a peer."""
@@ -255,8 +294,8 @@ def get_metadata(
 @app.command("set-metadata")
 def set_metadata(
     metadata: str = typer.Argument(help="JSON metadata to set (e.g. '{\"key\": \"value\"}')"),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
-    peer: str | None = typer.Option(None, "--peer", "-p", help="Peer ID (uses default if omitted)"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
+    peer: Optional[str] = typer.Option(None, "--peer", "-p", help="Peer ID (uses default if omitted)"),
     json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
 ) -> None:
     """Set metadata for a peer."""
@@ -269,7 +308,7 @@ def set_metadata(
         parsed = json.loads(metadata)
     except json.JSONDecodeError as e:
         print_error("INVALID_JSON", f"metadata must be valid JSON: {e}", {})
-        raise typer.Exit(1) from e
+        raise typer.Exit(1)
 
     p = client.peer(pid)
 
@@ -282,13 +321,13 @@ def set_metadata(
 
 @app.command()
 def representation(
-    peer_id: str | None = typer.Argument(None, help="Peer ID (uses default if omitted)"),
-    target: str | None = typer.Option(None, help="Target peer to get representation about"),
-    search_query: str | None = typer.Option(None, help="Semantic search query to filter conclusions"),
-    max_conclusions: int | None = typer.Option(None, help="Maximum number of conclusions to include"),
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
-    peer: str | None = typer.Option(None, "--peer", "-p", help="Override peer ID"),
-    session: str | None = typer.Option(None, "--session", "-s", help="Override session ID"),
+    peer_id: Optional[str] = typer.Argument(None, help="Peer ID (uses default if omitted)"),
+    target: Optional[str] = typer.Option(None, help="Target peer to get representation about"),
+    search_query: Optional[str] = typer.Option(None, help="Semantic search query to filter conclusions"),
+    max_conclusions: Optional[int] = typer.Option(None, help="Maximum number of conclusions to include"),
+    workspace: Optional[str] = typer.Option(None, "--workspace", "-w", help="Override workspace ID"),
+    peer: Optional[str] = typer.Option(None, "--peer", "-p", help="Override peer ID"),
+    session: Optional[str] = typer.Option(None, "--session", "-s", help="Override session ID"),
     json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
 ) -> None:
     """Get the formatted representation for a peer."""

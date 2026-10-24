@@ -16,6 +16,10 @@ def workspace(workspace_id: str) -> str:
     return f"/{API_VERSION}/workspaces/{workspace_id}"
 
 
+def workspace_chat(workspace_id: str) -> str:
+    return f"/{API_VERSION}/workspaces/{workspace_id}/chat"
+
+
 def workspace_search(workspace_id: str) -> str:
     return f"/{API_VERSION}/workspaces/{workspace_id}/search"
 
@@ -109,6 +113,10 @@ def scopes(workspace_id: str) -> str:
 
 def scopes_list(workspace_id: str) -> str:
     return f"/{API_VERSION}/workspaces/{workspace_id}/scopes/list"
+
+
+def scope(workspace_id: str, scope_id: str) -> str:
+    return f"/{API_VERSION}/workspaces/{workspace_id}/scopes/{scope_id}"
 
 
 def scope_sessions(workspace_id: str, scope_id: str) -> str:

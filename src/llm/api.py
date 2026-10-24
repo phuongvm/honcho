@@ -9,7 +9,7 @@ settings into concrete runtime ModelConfigs.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Collection
 from typing import Any, Literal, TypeVar, overload
 
 from pydantic import BaseModel
@@ -17,22 +17,26 @@ from sentry_sdk.ai.monitoring import ai_track
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.config import ConfiguredModelSettings, ModelConfig, settings
+from src.exceptions import ValidationException
 from src.telemetry.logging import conditional_observe
 from src.telemetry.reasoning_traces import log_reasoning_trace
 
+from .errors import llm_retry_condition
 from .executor import honcho_llm_call_inner
 from .runtime import (
     AttemptPlan,
+    CapturedAgentSpan,
     current_attempt,
     effective_temperature,
     force_fallback,
     plan_attempt,
     resolve_runtime_model_config,
-    start_langfuse_agent_run,
+    start_captured_span,
     update_current_langfuse_observation,
 )
 from .tool_loop import execute_tool_loop
 from .types import (
+    BudgetLine,
     HonchoLLMCallResponse,
     HonchoLLMCallStreamChunk,
     IterationCallback,
@@ -62,10 +66,15 @@ async def honcho_llm_call(
     reasoning_effort: ReasoningEffortType = None,
     verbosity: Literal["low", "medium", "high"] | None = None,
     thinking_budget_tokens: int | None = None,
+    validate_response: Callable[[HonchoLLMCallResponse[Any]], None] | None = None,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
     tool_executor: Callable[[str, dict[str, Any]], Any] | None = None,
     max_tool_iterations: int = 20,
+    force_tools_until: Collection[str] | None = None,
+    max_forced_iterations: int = 3,
+    budget_line: BudgetLine | None = None,
+    final_call_tools: list[dict[str, Any]] | None = None,
     messages: list[dict[str, Any]] | None = None,
     enable_retry: bool = True,
     retry_attempts: int = 3,
@@ -74,6 +83,7 @@ async def honcho_llm_call(
     stream_final_only: bool = False,
     iteration_callback: IterationCallback | None = None,
     telemetry: LLMTelemetryContext | None = None,
+    run: CapturedAgentSpan | None = None,
 ) -> HonchoLLMCallResponse[str]: ...
 
 
@@ -92,10 +102,15 @@ async def honcho_llm_call(
     reasoning_effort: ReasoningEffortType = None,
     verbosity: Literal["low", "medium", "high"] | None = None,
     thinking_budget_tokens: int | None = None,
+    validate_response: Callable[[HonchoLLMCallResponse[Any]], None] | None = None,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
     tool_executor: Callable[[str, dict[str, Any]], Any] | None = None,
     max_tool_iterations: int = 20,
+    force_tools_until: Collection[str] | None = None,
+    max_forced_iterations: int = 3,
+    budget_line: BudgetLine | None = None,
+    final_call_tools: list[dict[str, Any]] | None = None,
     messages: list[dict[str, Any]] | None = None,
     enable_retry: bool = True,
     retry_attempts: int = 3,
@@ -104,6 +119,7 @@ async def honcho_llm_call(
     stream_final_only: bool = False,
     iteration_callback: IterationCallback | None = None,
     telemetry: LLMTelemetryContext | None = None,
+    run: CapturedAgentSpan | None = None,
 ) -> HonchoLLMCallResponse[M]: ...
 
 
@@ -122,10 +138,15 @@ async def honcho_llm_call(
     reasoning_effort: ReasoningEffortType = None,
     verbosity: Literal["low", "medium", "high"] | None = None,
     thinking_budget_tokens: int | None = None,
+    validate_response: Callable[[HonchoLLMCallResponse[Any]], None] | None = None,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
     tool_executor: Callable[[str, dict[str, Any]], Any] | None = None,
     max_tool_iterations: int = 20,
+    force_tools_until: Collection[str] | None = None,
+    max_forced_iterations: int = 3,
+    budget_line: BudgetLine | None = None,
+    final_call_tools: list[dict[str, Any]] | None = None,
     messages: list[dict[str, Any]] | None = None,
     enable_retry: bool = True,
     retry_attempts: int = 3,
@@ -134,6 +155,7 @@ async def honcho_llm_call(
     stream_final_only: bool = False,
     iteration_callback: IterationCallback | None = None,
     telemetry: LLMTelemetryContext | None = None,
+    run: CapturedAgentSpan | None = None,
 ) -> AsyncIterator[HonchoLLMCallStreamChunk] | StreamingResponseWithMetadata: ...
 
 
@@ -152,10 +174,15 @@ async def honcho_llm_call(
     reasoning_effort: ReasoningEffortType = None,
     verbosity: Literal["low", "medium", "high"] | None = None,
     thinking_budget_tokens: int | None = None,
+    validate_response: Callable[[HonchoLLMCallResponse[Any]], None] | None = None,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
     tool_executor: Callable[[str, dict[str, Any]], Any] | None = None,
     max_tool_iterations: int = 20,
+    force_tools_until: Collection[str] | None = None,
+    max_forced_iterations: int = 3,
+    budget_line: BudgetLine | None = None,
+    final_call_tools: list[dict[str, Any]] | None = None,
     messages: list[dict[str, Any]] | None = None,
     enable_retry: bool = True,
     retry_attempts: int = 3,
@@ -164,6 +191,7 @@ async def honcho_llm_call(
     stream_final_only: bool = False,
     iteration_callback: IterationCallback | None = None,
     telemetry: LLMTelemetryContext | None = None,
+    run: CapturedAgentSpan | None = None,
 ) -> (
     HonchoLLMCallResponse[Any]
     | AsyncIterator[HonchoLLMCallStreamChunk]
@@ -171,12 +199,28 @@ async def honcho_llm_call(
 ):
     """High-level LLM call entry point.
 
-    Coordinates:
-    - Runtime ModelConfig resolution from settings/alias inputs.
-    - Retry attempt tracking via ContextVar `current_attempt`.
-    - Fallback provider switching on the final retry attempt.
-    - Optional tool calling loop when `tools` and `tool_executor` are supplied.
-    - Sentry / Langfuse / telemetry tracing.
+    Backup provider/model (if configured on the primary ModelConfig's
+    `fallback`) is used on the final retry attempt, which is 3 by default.
+
+    A provider rejection of the request itself (a 4xx other than
+    408/409/425/429; see `is_non_retryable_client_error`) is not retried when
+    no fallback is configured, since the same model would reject it again.
+    With a fallback it is retried as before, so the fallback still gets its
+    attempt.
+
+    A caller-supplied `run` stays owned by the caller; otherwise the call opens
+    and ends its own around the tool loop.
+
+    `validate_response` runs on each attempt's response inside the retried
+    call, so raising from it consumes an attempt exactly like a provider error:
+    it is retried and reaches the fallback on the final attempt (with
+    `enable_retry=False`, the first raise propagates). It sees the response
+    before call-level fields such as `hit_input_token_cap` are set. Tool-less,
+    non-streaming calls only.
+
+    Raises:
+        ValidationException: If streaming and tool calling are combined
+                             without `stream_final_only=True`.
     """
     if track_name is not None:
         if telemetry is None:
@@ -186,7 +230,26 @@ async def honcho_llm_call(
 
     runtime_model_config = resolve_runtime_model_config(model_config)
 
-    # Reset retry state for this call tree.
+    # Caller kwargs left at None are resolved downstream by
+    # effective_config_for_call against whichever ModelConfig wins the
+    # attempt (primary or fallback). Defaulting here from
+    # runtime_model_config would clobber a fallback config's own
+    # temperature/thinking params on the final retry, so we deliberately
+    # keep the locals as the caller supplied them.
+
+    if stream and tools and not stream_final_only:
+        raise ValidationException(
+            "Streaming is not supported with tool calling. "
+            + "Set stream=False when using tools, or use stream_final_only=True "
+            + "to stream only the final response after tool calls."
+        )
+
+    if validate_response is not None and (stream or (tools and tool_executor)):
+        raise ValidationException(
+            "validate_response is only supported on tool-less, non-streaming calls"
+        )
+
+    # tenacity uses 1-indexed attempts.
     current_attempt.set(1)
     force_fallback.set(False)
 
@@ -238,7 +301,7 @@ async def honcho_llm_call(
                 telemetry=telemetry,
                 messages=messages,
             )
-        return await honcho_llm_call_inner(
+        response = await honcho_llm_call_inner(
             plan.provider,
             plan.model,
             prompt,
@@ -259,6 +322,9 @@ async def honcho_llm_call(
             telemetry=telemetry,
             messages=messages,
         )
+        if validate_response is not None:
+            validate_response(response)
+        return response
 
     decorated = _call_with_provider_selection
 
@@ -314,11 +380,24 @@ async def honcho_llm_call(
                 exc,
             )
 
+    # Stops early only without a fallback, so the attempts it stops are always
+    # the primary's.
+    retry_condition = llm_retry_condition(
+        can_fall_back=runtime_model_config.fallback is not None,
+        retry_attempts=retry_attempts,
+        model=f"{runtime_model_config.transport}/{runtime_model_config.model}",
+    )
+
     if enable_retry:
         decorated = retry(
+            retry=retry_condition,
             stop=stop_after_attempt(retry_attempts),
             wait=wait_exponential(multiplier=1, min=4, max=10),
             before_sleep=before_retry_callback,
+            # Surface the provider's own error once the budget is spent.
+            # Without this tenacity raises RetryError, which erases the cause
+            # and lands every outage on the generic 500 handler.
+            reraise=True,
         )(decorated)
 
     if not tools or not tool_executor:
@@ -364,7 +443,7 @@ async def honcho_llm_call(
                         telemetry=telemetry,
                         messages=captured_messages,
                     )
-                return await honcho_llm_call_inner(
+                response = await honcho_llm_call_inner(
                     plan.provider,
                     plan.model,
                     prompt,
@@ -385,15 +464,22 @@ async def honcho_llm_call(
                     telemetry=telemetry,
                     messages=captured_messages,
                 )
+                if validate_response is not None:
+                    validate_response(response)
+                return response
 
             wrapped = _toolless_call
             if sentry_track_name:
                 wrapped = ai_track(sentry_track_name)(wrapped)
             if enable_retry:
                 wrapped = retry(
+                    retry=retry_condition,
                     stop=stop_after_attempt(retry_attempts),
                     wait=wait_exponential(multiplier=1, min=4, max=10),
                     before_sleep=before_retry_callback,
+                    # Same as above: the toolless path is what the deriver
+                    # uses, so an outage here must stay legible too.
+                    reraise=True,
                 )(wrapped)
             result: (
                 HonchoLLMCallResponse[Any]
@@ -432,12 +518,17 @@ async def honcho_llm_call(
             )
         return result
 
-    run_label = (telemetry.track_name if telemetry else None) or "Agent"
-    run_handle = start_langfuse_agent_run(run_label, telemetry)
-    if run_handle is not None:
-        run_handle.update(
-            input=messages if messages else [{"role": "user", "content": prompt}]
-        )
+    # One run span wraps the whole run. A streaming result takes ownership and
+    # ends it after drain so the streamed text becomes the run's output;
+    # otherwise it ends below.
+    owns_run = run is None
+    # Mirror execute_tool_loop's prompt-only handling: when messages is omitted
+    # it seeds the conversation with a single user message built from prompt.
+    run_handle = run or start_captured_span(
+        "run",
+        telemetry,
+        input=messages if messages else [{"role": "user", "content": prompt}],
+    )
     try:
         result = await execute_tool_loop(
             prompt=prompt,
@@ -447,6 +538,10 @@ async def honcho_llm_call(
             tool_choice=tool_choice,
             tool_executor=tool_executor,
             max_tool_iterations=max_tool_iterations,
+            force_tools_until=force_tools_until,
+            max_forced_iterations=max_forced_iterations,
+            budget_line=budget_line,
+            final_call_tools=final_call_tools,
             response_model=response_model,
             json_mode=json_mode,
             temperature=temperature,
@@ -457,17 +552,24 @@ async def honcho_llm_call(
             max_input_tokens=max_input_tokens,
             get_attempt_plan=_get_attempt_plan,
             before_retry_callback=before_retry_callback,
+            retry_condition=retry_condition,
             stream_final=stream_final_only,
             iteration_callback=iteration_callback,
             telemetry=telemetry,
-            langfuse_run_handle=run_handle,
+            run_span=run_handle if owns_run else None,
         )
     except BaseException:
-        if run_handle is not None:
-            run_handle.end()
+        if run_handle is not None and owns_run:
+            run_handle.end(is_error=True)
         raise
-
-    if run_handle is not None and isinstance(result, HonchoLLMCallResponse):
+    # Streaming wrapper owns the handle and closes it after drain;
+    # non-streaming paths (always a HonchoLLMCallResponse here) close it now
+    # with the final content as output.
+    if (
+        run_handle is not None
+        and owns_run
+        and isinstance(result, HonchoLLMCallResponse)
+    ):
         run_handle.end(output=result.content)
 
     if isinstance(result, HonchoLLMCallResponse) and settings.langfuse_inline_enabled:

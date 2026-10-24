@@ -13,6 +13,7 @@ export {
    */
   ConclusionsView as ConclusionScope,
   ConclusionsView,
+  WorkspaceConclusions,
 } from './conclusions'
 // HTTP infrastructure
 export {
@@ -51,9 +52,14 @@ export {
 
 // API types (snake_case, for advanced usage)
 export type {
+  ChatResponse,
   ConclusionLevel,
   ConclusionQueryParams,
   ConclusionResponse,
+  Evidence,
+  EvidenceMessageRef,
+  EvidenceObservation,
+  EvidenceToolCall,
   MessageResponse,
   PageResponse,
   PeerContextResponse,
@@ -69,6 +75,7 @@ export type {
   SessionResponse,
   SessionSummariesResponse,
   SummaryResponse,
+  WorkspaceChatResponse,
   WorkspaceResponse,
 } from './types/api'
 

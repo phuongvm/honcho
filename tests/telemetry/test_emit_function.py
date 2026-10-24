@@ -383,10 +383,9 @@ class TestInitializeTelemetryAsync:
             mock_ce_init.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_skip_when_telemetry_disabled(self):
-        """TELEMETRY.ENABLED is the master switch — no init when it's off, even
-        with the Langfuse exporter configured (no traces for open-source users
-        who leave telemetry off)."""
+    async def test_langfuse_exporter_initializes_when_telemetry_disabled(self):
+        """HONCHO-INV-5 (fork): a configured Langfuse exporter initializes the
+        event sinks even when TELEMETRY.ENABLED is off."""
         from src.telemetry import initialize_telemetry_async
 
         with (
@@ -401,7 +400,7 @@ class TestInitializeTelemetryAsync:
 
             await initialize_telemetry_async()
 
-            mock_ce_init.assert_not_called()
+            mock_ce_init.assert_called_once()
 
 
 # =============================================================================
