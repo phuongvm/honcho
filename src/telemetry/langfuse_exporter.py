@@ -516,6 +516,10 @@ class LangfuseExporter:
         # Operator-written instructions get their own key: the input embeds them
         # in a prompt, which makes them hard to find or filter on.
         md = self._step_metadata(call)
+        # HONCHO-INV-5 (fork): fallback observability. `was_fallback` mirrors the
+        # captured field; `is_fallback` is the key the fork's Langfuse filters use.
+        md["was_fallback"] = str(call.was_fallback).lower()
+        md["is_fallback"] = str(call.was_fallback).lower()
         if call.custom_instructions:
             md["custom_instructions"] = call.custom_instructions
         return md

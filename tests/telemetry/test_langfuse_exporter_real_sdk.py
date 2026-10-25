@@ -31,7 +31,7 @@ def exported(monkeypatch: pytest.MonkeyPatch) -> Iterator[InMemorySpanExporter]:
     # The SDK caches its span pipeline per public key, so each test needs its own.
     public_key = f"pk-lf-{uuid.uuid4().hex}"
     monkeypatch.setattr(settings, "LANGFUSE_PUBLIC_KEY", public_key)
-    # Fork default is LANGFUSE_EXPORTER_MODE="inline" (HONCHO-INV-5).
+    # Fork default is LANGFUSE_EXPORTER_MODE="exporter" (HONCHO-INV-5); pin it anyway.
     monkeypatch.setattr(settings, "LANGFUSE_EXPORTER_MODE", "exporter")
     span_exporter = InMemorySpanExporter()
     client = Langfuse(

@@ -73,7 +73,7 @@ class FakeClient:
 def _exporter_env(monkeypatch: pytest.MonkeyPatch):
     """Enable the exporter and install a fake langfuse client + clean registry."""
     monkeypatch.setattr(settings, "LANGFUSE_PUBLIC_KEY", "pk-test")
-    # Fork default is LANGFUSE_EXPORTER_MODE="inline" (HONCHO-INV-5).
+    # Fork default is LANGFUSE_EXPORTER_MODE="exporter" (HONCHO-INV-5); pin it anyway.
     monkeypatch.setattr(settings, "LANGFUSE_EXPORTER_MODE", "exporter")
     monkeypatch.setattr(settings, "NAMESPACE", "tenant1")
     client = FakeClient()
@@ -367,6 +367,68 @@ def test_no_custom_instructions_key_without_instructions(_exporter_env: FakeClie
     LangfuseExporter().export(_call(run_id=None, trace_id="t1"))
     metadata = cast(dict[str, str], _generation(_exporter_env).kwargs["metadata"])
     assert "custom_instructions" not in metadata
+
+
+def test_fallback_flags_ride_in_generation_metadata(_exporter_env: FakeClient):
+    """HONCHO-INV-5 (fork): exporter mode keeps fallback observability filters."""
+    call = _call(run_id=None, trace_id="t1")
+    call.was_fallback = True
+    LangfuseExporter().export(call)
+
+    metadata = cast(dict[str, str], _generation(_exporter_env).kwargs["metadata"])
+    assert metadata["was_fallback"] == "true"
+    assert metadata["is_fallback"] == "true"
+
+
+def test_primary_call_marks_fallback_flags_false(_exporter_env: FakeClient):
+    LangfuseExporter().export(_call(run_id=None, trace_id="t1"))
+
+    metadata = cast(dict[str, str], _generation(_exporter_env).kwargs["metadata"])
+    assert metadata["was_fallback"] == "false"
+    assert metadata["is_fallback"] == "false"
+
+
+def test_exporter_is_default_mode_and_disables_inline_observe(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """HONCHO-INV-5 (fork): with only a public key set, the default mode is the
+    full-flow exporter and the legacy outer @conditional_observe is a no-op."""
+    from src.config import AppSettings
+    from src.telemetry.logging import conditional_observe
+
+    assert AppSettings.model_fields["LANGFUSE_EXPORTER_MODE"].default == "exporter"
+    monkeypatch.setattr(settings, "LANGFUSE_EXPORTER_MODE", "exporter")
+    assert settings.langfuse_exporter_enabled is True
+    assert settings.langfuse_inline_enabled is False
+
+    def f() -> str:
+        return "x"
+
+    assert conditional_observe(name="LLM Call", as_type="generation")(f) is f
+
+
+@pytest.mark.asyncio
+async def test_exporter_registers_when_telemetry_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """HONCHO-INV-5 (fork): LangfuseExporter registers on its own when
+    TELEMETRY.ENABLED is False, and the CloudEvents emitter stays off."""
+    from unittest.mock import AsyncMock, patch
+
+    from src.llm import capture
+    from src.telemetry import initialize_telemetry_async
+
+    monkeypatch.setattr(settings.TELEMETRY, "ENABLED", False)
+    capture._EXPORTERS[:] = [
+        e for e in capture._EXPORTERS if not isinstance(e, LangfuseExporter)
+    ]
+    with patch(
+        "src.telemetry.emitter.initialize_emitter", new_callable=AsyncMock
+    ) as mock_init:
+        await initialize_telemetry_async()
+
+    mock_init.assert_not_called()
+    assert any(isinstance(e, LangfuseExporter) for e in capture._EXPORTERS)
 
 
 def test_text_only_output_stays_a_string(_exporter_env: FakeClient):

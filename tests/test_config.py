@@ -258,3 +258,60 @@ def test_thinking_tool_choice_conflict_from_env_is_validated_at_config_load(
 
     with pytest.raises(ValueError, match="thinking_tool_choice_conflict must be"):
         AppSettings()
+
+
+# HONCHO-INV-5 (fork): exporter is the default Langfuse mode; inline stays opt-in.
+
+
+def _clear_langfuse_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.config.TOML_CONFIG", {})
+    for name in ("LANGFUSE_EXPORTER_MODE", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_HOST"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_langfuse_exporter_mode_defaults_to_exporter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_langfuse_env(monkeypatch)
+    assert AppSettings.model_fields["LANGFUSE_EXPORTER_MODE"].default == "exporter"
+
+    app = AppSettings(LANGFUSE_PUBLIC_KEY="pk-test")
+
+    assert app.LANGFUSE_EXPORTER_MODE == "exporter"
+    assert app.langfuse_exporter_enabled is True
+    # The legacy flat outer @conditional_observe stays off by default.
+    assert app.langfuse_inline_enabled is False
+
+
+def test_langfuse_exporter_disabled_without_public_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_langfuse_env(monkeypatch)
+
+    app = AppSettings()
+
+    assert app.LANGFUSE_EXPORTER_MODE == "exporter"
+    assert app.langfuse_exporter_enabled is False
+    assert app.langfuse_inline_enabled is False
+
+
+def test_langfuse_inline_mode_remains_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_langfuse_env(monkeypatch)
+    monkeypatch.setenv("LANGFUSE_EXPORTER_MODE", "inline")
+
+    app = AppSettings(LANGFUSE_PUBLIC_KEY="pk-test")
+
+    assert app.LANGFUSE_EXPORTER_MODE == "inline"
+    assert app.langfuse_inline_enabled is True
+    assert app.langfuse_exporter_enabled is False
+
+
+def test_langfuse_exporter_mode_rejects_unknown_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_langfuse_env(monkeypatch)
+
+    with pytest.raises(ValueError):
+        AppSettings(LANGFUSE_EXPORTER_MODE="bogus")  # pyright: ignore[reportArgumentType]

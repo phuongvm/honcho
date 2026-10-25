@@ -171,7 +171,7 @@ def test_same_call_reaches_both_exporters(
 ):
     """A dispatched call fans out to the CloudEvents spy AND the LangfuseExporter."""
     monkeypatch.setattr(settings, "LANGFUSE_PUBLIC_KEY", "pk-test")
-    # Fork default is LANGFUSE_EXPORTER_MODE="inline" (HONCHO-INV-5).
+    # Fork default is LANGFUSE_EXPORTER_MODE="exporter" (HONCHO-INV-5); pin it anyway.
     monkeypatch.setattr(settings, "LANGFUSE_EXPORTER_MODE", "exporter")
     monkeypatch.setattr(settings, "NAMESPACE", "tenant1")
 

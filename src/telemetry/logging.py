@@ -31,8 +31,9 @@ console = Console(markup=True)
 COLLECT_METRICS_LOCAL = settings.COLLECT_METRICS_LOCAL
 
 
-# HONCHO-INV-5 (fork): inline Langfuse instrumentation is the fork default
-# (LANGFUSE_EXPORTER_MODE="inline"); upstream removed it in #1253.
+# HONCHO-INV-5 (fork): inline Langfuse instrumentation is kept as an opt-in
+# legacy mode (LANGFUSE_EXPORTER_MODE="inline"); upstream removed it in #1253.
+# The fork default is "exporter" (LangfuseExporter full trace tree).
 P = ParamSpec("P")
 R = TypeVar("R")
 

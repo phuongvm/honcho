@@ -1676,12 +1676,16 @@ class AppSettings(HonchoSettings):
     EMBED_MESSAGES: bool = True
     LANGFUSE_HOST: str | None = None
     LANGFUSE_PUBLIC_KEY: str | None = None
-    # How Langfuse traces are produced:
-    #   "inline" (default) — live instrumentation (@observe + propagate_attributes
-    #     spans during execution). Direct integration with self-hosted Langfuse.
-    #   "exporter" — Langfuse is a projection over the captured
-    #     CapturedLLMCall stream (LangfuseExporter).
-    LANGFUSE_EXPORTER_MODE: Literal["inline", "exporter"] = "inline"
+    # How Langfuse traces are produced (HONCHO-INV-5, fork):
+    #   "exporter" (default) — Langfuse is a projection over the captured
+    #     CapturedLLMCall stream (LangfuseExporter): the full trace tree
+    #     (trace -> run agent -> step -> generation + tool spans). The exporter
+    #     registers whenever a key is set, independent of TELEMETRY.ENABLED, and
+    #     the legacy outer @conditional_observe on honcho_llm_call stays off, so
+    #     ModelConfig.api_key is never auto-captured into traces.
+    #   "inline" — legacy live instrumentation (@observe + propagate_attributes
+    #     spans during execution). Kept for backward compatibility only.
+    LANGFUSE_EXPORTER_MODE: Literal["inline", "exporter"] = "exporter"
 
     @property
     def langfuse_inline_enabled(self) -> bool:
